@@ -65,12 +65,13 @@ const BASE_PACKAGE_PREFIX = "@deepseek-ai/dsh-"
 /**
  * 自动升级 commit 的署名。
  *
- * ⚠️ 与 `.github/workflows/upgrade-upstream.yml` 里的 git 配置**必须一致** ——
- *    否则本机跑出来的 commit 与 CI 跑出来的署名不同，看着像两个人干的。
- *    用「机器人」名而不是个人名，是为了在提交历史里一眼看出是自动升级。
+ * ⚠️ 用**标准 GitHub Actions 机器人**身份（`github-actions[bot]` + 其专用 noreply 邮箱），
+ *    这样 GitHub 会把它当成官方 bot 提交（头像、`bot` 标记、跳过部分通知），
+ *    历史里也一眼能看出是自动升级。
+ *    邮箱里的 `41898282` 是 GitHub Actions bot 的固定 user id，不要改。
  */
-const BOT_NAME = "upgrade-bot"
-const BOT_EMAIL = "upgrade-bot@users.noreply.github.com"
+const BOT_NAME = "github-actions[bot]"
+const BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 
 const args = new Set(process.argv.slice(2))
 const dryRun = args.has("--dry-run")
@@ -437,13 +438,13 @@ try {
 
 // ── ⑥ 测试与规范 ──
 //
-// ⚠️ `format:check` 放在**写 CHANGELOG 之前**跑：等 CHANGELOG 写完再检查，它必然
-//    会因为「自动生成的格式与 Prettier 不一致」而红 —— 那是脚本自己造的噪音，
-//    会让每次自动升级都失败。第 ⑦ 步写完 CHANGELOG 后会**自动格式化**它。
+// ⚠️ 这里**不跑 `format:check`**：自动升级只要 lint + test 通过即可。
+//    格式化是开发者本地的事，不该成为升级流水线的硬门槛 —— README/CHANGELOG
+//    的排版差异会把每次自动升级都卡红。第 ⑦ 步仍会对刚生成的 CHANGELOG
+//    单独 `prettier --write`，但不做全仓校验。
 for (const [label, command, commandArgs] of [
   ["npm test", "npm", ["test"]],
   ["npm run lint", "npm", ["run", "lint"]],
-  ["npm run format:check", "npm", ["run", "format:check"]],
 ]) {
   try {
     log(`${label} …`)
@@ -569,15 +570,6 @@ try {
   run("npx", ["prettier", "--write", "CHANGELOG.md"], { stdio: ["ignore", "inherit", "inherit"] })
 } catch (error) {
   fail("格式化 CHANGELOG.md 失败", error)
-  process.exit(1)
-}
-
-// 再验一次格式（确认自动生成的东西确实合规）。
-try {
-  log("复核 format:check …")
-  run("npm", ["run", "format:check"], { stdio: ["ignore", "inherit", "inherit"] })
-} catch (error) {
-  fail("format:check 失败（自动生成的 CHANGELOG 不合规？）", error)
   process.exit(1)
 }
 

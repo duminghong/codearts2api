@@ -7,6 +7,267 @@
 ---
 
 <details open>
+<summary><b>2026-11-06 · 上游升级 <code>a5b3cd1</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `fddb8751f82b7ece80b398f514c974705b656fe4` 更新到 `a5b3cd10dd49c27064c1270da205ca19a5e77d0a`。
+
+### 上游改动
+
+- fix(magicrew,buddy,jet-hub): 第二轮审计返工 —— 降级读数不得烧永久积分 / 文案补域名与出路 / 补 7 条零守卫
+- fix(codearts): 收图能力补两条「目录过期」的主模型 —— deepseek-v4.1-flash / -1017
+- fix(monkeycode,baizhi): 第二轮审计返工 —— 代理加固 / NO_PROXY / 多值编码 / 授信边界
+- fix(monkeycode,baizhi): 按两轮审计返工 —— 直连传输 / 假分母 / 跨 provider 回归
+- fix: 关闭全部模型时补设「供应商关闭」意图（setDisabledMany 第三入口）
+- fix(monkeycode,baizhi): 修复签名直连与额度窗口/积分展示
+- fix(magicrew): 按两轮审计返工 —— Snappy 上限 / 失败日志 / 逐对回退 / 序列去重与 tombstone
+- fix(codearts): 三个「非凭据问题」业务码各自单列 —— 别再吞成「API 密钥无效」
+- fix(zcode): 身份块跟上官方 3.17.x —— 3012 的真正判据是「版本 × 身份块同代」
+- fix(codearts): 推理请求覆盖 UA —— 华为 WAF 按 `deepseek-harness/` 前缀拒发
+- test: 补两条假绿/无牙守卫 —— 合法 JSON 非对象、ensureLoaded 可重试
+- test: 修 4 条基线红 —— 测试桩的 settings.register 必须返回 scope 对象
+- fix(jet-hub): 四审 10 条 —— 「读不到目录」不再断言「没关闭」、前端补丁回调逐层透传
+- fix(client): 核实失败时开关必须给出原因（不再渲染成「可点的已打开」）
+- docs(protocol-wire): 三审记录 —— 5 条真缺陷、变异、5 条可推广教训
+- fix(aggregate): 补写「整个 provider 已关闭」必须 await（否则把用户刚打开的模型重新关掉）
+- fix(client): 供应商开关不再「跳回去」（序号防乱序 + 全开后刷新状态）
+- fix(jet-hub): 核实腿失败时透出原因（开关不再「点不动且无解释」）
+- perf(jet-hub): provider.status 的核实腿改并发（56 秒 → 2 秒）
+- fix(jet-hub): 三审 P0/P1 —— 读盘失败不再覆盖磁盘、降级不再烧永久积分
+- test(jet-hub): 二审 4 条必修 —— 去过强断言、补漏掉的写入断言
+- fix(jet-hub): 冷帧拒绝文案与「无账号」分开说 + 补类型保护（二审 3 条建议）
+- test(jet-hub): 补冷帧守卫 + 修两条不判别断言（红队 34 变异复核）
+- docs(jet-hub): 审查后修正 12 处过时注释与文档（三态 keep / 五段判据）
+- fix(jet-hub): 「关闭供应商」不再被后来的「全关模型」静默删除
+- fix(magicrew): 补 referer 头，修昵称恒回落与 gateway key 恒签发失败
+- fix(magicrew): 读本机浏览器登录态时解 leveldb Snappy 压缩块，并补 CDP 前缀键名
+- fix(jet-hub): 模型列表屏的「全关」在供应商无账号时不再报「没有可关闭的模型」
+- fix(magicrew): 锁定态读不到余额时不再清空模型列表
+- fix(magicrew): 归因改口 —— 「境外出口/地区封锁」已被完整出口矩阵证伪
+- fix(magicrew): 失败原因不再塌成一句 —— 非 JSON 分两格、锁定态点名 403/405、401 说明锁不丢
+- docs(magicrew): 补记整站被拦的取证（目录/积分/推理三条腿同 host 全 403/405）
+- fix(magicrew): 报错里给域名而不是完整 URL（代理直连规则匹配域名）
+- docs(magicrew): 补两条可推广教训（锁定与出模型同一件事、两条取数腿）
+- docs(magicrew): 补记 403/405 同档与六条变异
+- fix(magicrew): 405 与 403 必须同档（国际站被 WAF 拒时回的是 405）
+- fix(magicrew): 积分查询失败必须说清原因（真机：境外出口被 WAF 拒）
+
+</details>
+
+<details>
+<summary><b>2026-11-04 · 上游升级 <code>fddb875</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `9047d42f47a0d04d99183abc15c0099ebc2285ed` 更新到 `fddb8751f82b7ece80b398f514c974705b656fe4`。
+
+### 上游改动
+
+- fix(zcode,baizhi): 未推送改动的审计修正（probe 假绿 / 复核失败文案）
+- test(zcode): 真机 claim 探针（3.17.1 实测 +300M token）
+- fix(zcode,baizhi): 双路审计修正 —— 推理版本与营销门控分离 / claimed:false 复核 / 测试去同义反复
+- feat(baizhi): 接入每日临时积分签到（Cap PoW，实测 +100）
+- fix(zcode): 营销门控下限抬到 3.17.1 —— 它是「逐期」的，定值必然腐坏
+
+</details>
+
+<details>
+<summary><b>2026-11-03 · 上游升级 <code>9047d42</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `c17a55661bd30aba321b55daf61426df9e319bbc` 更新到 `9047d42f47a0d04d99183abc15c0099ebc2285ed`。
+
+### 上游改动
+
+- fix(gateway): /v1/models 输出 context_window（issue #36）
+- docs(trae): 用原始 SSE 现场定论前缀缓存归零（issue IKSFT2）
+- fix(qoder): 设备锁失败码给出可读文案；登记设备锁限制（issue #17）
+- fix(codearts): 声明 providerRetryPolicy，瞬态失败交给宿主退避重试（issue #21）
+- fix(refresh): 首轮续期延后 15s，避免与宿主启动抢资源（issue #20）
+- fix(buddy): rewrite x-anthropic-billing-header fingerprint
+- fix(opencode): SOCKS5 隧道上按 https/wss 补 TLS 握手（issue #19）
+- fix(cline): 模型带日期/快照后缀时继承基底能力（issue #18）
+- fix(buddy): 登录判重改为「新凭据并入旧卡 + 删占位 + poll 重定向」
+- test+docs(pr171): 双轨审计取证 + 7 处假绿守卫补牙
+- fix(monkeycode): 稳定 user_id / 签到奖励实测 / PoW 总预算 / 邀请链接原语
+- fix(client): 补齐三家新 provider 的「新建账号」入口 + 签到零收益的展示兜底
+- test: 补齐三家 provider 的用例与编译图
+- feat(client): 账号卡片补「改 Key / 登录」与跨量纲后缀
+- feat(providers): 接入 MonkeyCode 两站与百智云
+- feat(buddy): 成长任务全路径自动化（体验专家族 + 小程序 Sequential 族 + 连登链）
+- fix(autoclawintl): 授权地址改由服务端签发（端口修对后报错逐字不变）
+- fix(autoclawintl): 回调端口改用注册过的 18432/19654/19723/53699
+- fix(autoclaw): Z.ai 授权端点用错 + state 全缺，导致登录成功但回调永不发生
+- docs(jet-hub): 登记「ASTUDIO 兜底恒不可达」与「两条用例各只有 1 条承重断言」（红队审查）
+- docs(jet-hub): 修正 product undefined 修复里的 5 处事实错误（审查后）
+- fix(jet-hub): product 恒为 undefined，凭据未配置时抛 TypeError（15 家共用）
+- fix(autoclawintl): 自查追加两条（读池失败不得删账号 / 停用原卡必须并入后启用）
+- fix(autoclawintl): 审查后修 11 条必修（站点门控/超时/有效期/去重/判据加固）
+- test(autoclawintl): 假凭据改用低熵桩值（repo-pii-guard 拦截）+ 断言同步
+- fix(autoclawintl): 补上 Z.ai OAuth 登录接线 —— 国际版此前没有任何可用的添加账号方式
+- fix(buddy): 登录成功后按 user_id 判重，同账号重复添加不再生成重复条目
+- test(account-pool): 钉住「落盘失败回滚内存」（对抗审计 B4）
+- fix(magicrew/credit-expiry/lock): 采纳 PR #168 双轨审计的 5 条打穿
+- fix(credit-expiry): 已作废额度不再冒充「临期」（PR #168 验证发现）
+- fix(client): 红条自救入口按真实按钮分支（文案收敛到纯函数，3 条用例钉住）
+- test(jet-hub-rpc): 守卫改成「探活真的成功」——否则 account.test 那条分支走不到（M12 仍无牙）
+- test(jet-hub-rpc): 钉住「account.test 探活不得清账号级封禁」（审计 M12 无牙）
+- test(account-pool): 钉住封禁标记的 early-return（同一报文不重复写盘）
+- fix: 采纳 2026-11-01 对抗审计的 5 条打穿 —— 封禁判据收紧、选号判据补齐、account.test 恢复不写存储
+- feat(magicrew): 永久/长期/临期三档积分 + 锁定/解锁永久积分（两站）
+- test(raccoon): 夹子的两个方向 —— 标题 64 不许抬高 / 网关 999999 不许漏出
+- test(buddy): 钉住「2xx 自愈清封禁」与「无标记时不写盘」（审计 M7 无牙）
+- fix: 修 Gitee IKS1L5（raccoon max_tokens 无夹子）与 IKS2MV（buddy 封禁不可见）
+- docs(auto-checkin): stop() 注释如实说明「回落值也不一定是 0」
+- test(auto-checkin): 渠道删掉再加回来时旧水位线必须失效（钉住 prunedSlots）
+- fix(auto-checkin): 第二轮审计 —— 补领窗改 3 小时、默认回 09:00、面板可退出、死代码清理
+- chore(auto-checkin): 收尾三处 —— RPC 拒绝混发、armNext 的 JSDoc 归位、文件末尾换行
+- fix(auto-checkin): 目标时段复用唯一判据 + stop() 清掉下次尝试时刻
+- test(auto-checkin): 逐渠道水位线的归一化判据（补上变异无牙的那一格）
+- fix(auto-checkin): 审计 P1 全修 —— 真 ±N 浮动 / 不吞时段 / 逐渠道补领 / 面板关闭即保存
+- feat(magicrew): 接入国际站 + 每日签到 + 新人奖励
+- feat(auto-checkin): 每天两个定时时段替代「首次启动跑一次」+ 随机浮动 + 修秒级忙循环
+- fix(qoder): 传输级失败改为换号（换出口）+ message 带上 cause 链（issue IKR5ZD）
+
+</details>
+
+<details>
+<summary><b>2026-11-03 · 调用方多 Key（分组授权）+ 磁盘读写全异步</b></summary>
+
+## 调用方多 Key（分组授权）
+
+- `/admin` 新增「调用方」弹窗（页头入口，与「总览」「网关」并列）：**分组**（模型白名单）、
+  **Key**（一把 Key 一个人）、**用量**、**调用记录** 四个页签；
+- 后端 `src/caller-gate.js` 旁挂在 `/v1/*` 反代之前：命中调用方 Key 就换成上游 Key 再转发，
+  不碰上游代码；未配置 `<home>/caller-keys.json` 时闸门完全关闭，行为与改造前一致；
+- Key 只存 `sha256`（常量时间比对），明文仅在新建响应里出现一次；停用 / 改分组按文件
+  mtime 立即生效；
+- 命令行：`src/caller-cli.js`（`init` / `add` / `list` / `groups` / `usage` / `days` …），
+  适合脚本化发 Key；
+- README 补 **[多把调用方 Key（分组授权）](README.md#多把调用方-key分组授权)** 一节
+  （开启方式、白名单语法、错误码与回滚）。
+
+## 磁盘读写全部异步
+
+- `src/` 下**不再有 `*Sync` 调用**：静态资源（`admin.js` 600KB+）与登录页、管理密钥、
+  调用方配置、用量 JSONL、看板快照全部改走 `node:fs/promises`；
+- 随之改为异步的对外接口：`createHttpServer()`、`loadOrCreateAdminKey()`、
+  `callerGate.loadStore()` / `checkDisabled()` / `scaffold()` / `reload()` /
+  `disabledSnapshot()` / `upstreamKey()`（调用方需 `await`）；测试辅助 `startTestApp()`
+  已同步更新；
+- `/v1` 热路径的上游 Key 读取加 **5 秒缓存**（换 Key 后最多 5 秒生效），闸门未启用时对
+  `caller-keys.json` 保留 2 秒负缓存，不再每个请求都 `stat` 一次；
+- 用量日志保持**异步串行写**：不阻塞事件循环，同一进程内写入有序、不交叉；
+- `scripts/upgrade-upstream.mjs` 保持全同步（一次性 CI 批处理，跑完即退出），不影响运行时。
+
+</details>
+
+<details>
+<summary><b>2026-11-01 · 上游升级 <code>c17a556</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `eb09210423ace12edf4e2793a4c3780386a2f63f` 更新到 `c17a55661bd30aba321b55daf61426df9e319bbc`。
+
+### 上游改动
+
+- fix(zcode): 溢出均衡四处审计打穿——语义订正 + 阈值 300 + 接线补守卫（2026-10-31 双路审计）
+- fix(zcode): 会话亲和加负载溢出 —— 长会话不再独占一个账号
+- fix(client): 手动复制面板审计修正 —— Escape 拦截 + 重复弹守卫 + 深色模式 + 守卫补牙（2026-10-31 审计）
+- fix(client): 剪贴板复制三层降级，修局域网 http 下复制静默失效——cherry-pick 自 PR #27
+- fix(codely): 审计修正 —— 团队级判据归一化 + 三处守卫补牙（2026-10-31 双路审计）
+- fix(codely): 402 区分团队级与账号级，团队预算耗尽不再连坐封号——cherry-pick 自 PR #27
+
+</details>
+
+<details>
+<summary><b>2026-10-31 · 上游升级 <code>eb09210</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `6fa74723d42ff605d1de349589c21a1ac4eb7ba2` 更新到 `eb09210423ace12edf4e2793a4c3780386a2f63f`。
+
+### 上游改动
+
+- fix(deploy): 复审修正 —— standalone 产物检测双层失效 + -env 解析期回归
+- fix(deploy): 审计修正 —— P0 symlink 逃逸 + P1×5 部署链 + P2×3 注册/核验（2026-10-31 审计）
+- fix(codearts): 图片能力审计修正 —— AgentCenter 通道灌入 + 空集不清空 + 冲突残留清理
+- fix(codearts): 图片能力改读远端 supports_images；analyzeImage 挂载改判「专用 VL」——cherry-pick 自 PR #27
+- feat(deploy): Windows 服务器部署（引导式/离线式产物 + 本地执行器 + 产物同步）——cherry-pick 自 PR #27
+- fix(buddy): 第五族 11140 的 displayTips.zh 必须到达用户眼前
+- test(zcode,codearts): 对抗审计补牙（P1×2 + P2×4）+ flake 修复 + 注释纠偏
+- test(zcode): M6 补牙 —— picked 出参腿（report→selection.accountId）砍掉时既有用例全绿，补行为级断言
+- feat(zcode): 按 DSH sessionId 做账号负载均衡（会话亲和 + 随机分摊，含面板开关）
+- fix(modelscope): classifyModelscopeError 同批 P1 修复补提交 —— 401/403 先判 auth（上一提交中该文件被 M7b 复验的 checkout 误回滚）
+- fix(qiniu,modelscope): 修对抗审计 P1 —— 401/403 先判 auth（认证故障不得放大成封池）+ 5 处守卫补牙
+- test(audit): 对抗审计收编 —— 20 组变异 19 有牙 + 1 结构性无牙登记，三个动态探针转正式守卫
+- docs(qiniu): 修审计查出的 P2 —— 模块头「兜底表刻意置空」注释与代码（77 条快照）自相矛盾
+- fix(merge): 合并收尾 —— 计数断言对齐 25 家 + opencode Bun 指纹传输加单测闸门（wreq-js 在装得到的机器上绕过网络桩真打上游）
+- feat(codearts): 出站字段按 IDE 抓包对齐 + 修 AgentCenter 两处字段名缺陷
+- fix(workbuddy): 客户端版本 5.5.2 → 5.9.4 + 登记 11140 的「账号被限制」第五族
+- docs(buddy): 补齐「版本取自 genieVersion」的反编译实证 + WorkBuddy 实测值 5.8.4
+- fix(buddy): CodeBuddy IDE 版本 1.106.1 → 4.12.2（X-IDE-Version + UA 同步）
+- fix(buddy): 身份句改漂移容忍匹配 + 登记「逗号」民间修法的实测结论
+- fix(codearts,magicrew): 第二轮审计 —— 修 3 个承重处 + 补 8 处无牙守卫
+- fix(codearts,magicrew): 第二轮自查 —— 修安全集漏字符 + 代码页解错 + 移除死字段
+- fix(codearts,magicrew): 修 PR!161/!162 四路审计查出的 14 个真缺陷 + 补 23 处无牙守卫
+- fix(magicrew): 支持便携版浏览器导入与登录导航
+- docs(qiniu): 补 README 渠道表与能力要点、新增 providers-qiniu.md、登记 AGENTS.md 索引
+- fix(qiniu): 修审计查出的两处静默缺陷（非法 credentialRef / 超限不触发压缩）
+- feat(qiniu): 接入七牛云 provider 及其模型（第 16 家）
+- feat(codearts): 接入 AgentCenter 动态窗口源，静态表降为冷缓存兜底
+- fix(opencode): 内置工具整套发送 + UA 对齐 v2 通道
+- fix(modelscope): 兜底表认日期快照后缀，修 -1017 被误判为纯文本（Issue #12）
+- fix(opencode): 免费通道按传输层指纹被拒 —— 补 Bun TLS 指纹与官方形态提示词
+
+</details>
+
+<details>
+<summary><b>2026-10-30 · 上游升级 <code>6fa7472</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `4f582d7233636d935b9796322bdcbbf7a746350f` 更新到 `6fa74723d42ff605d1de349589c21a1ac4eb7ba2`。
+
+### 上游改动
+
+- fix(magicrew): account.list 自愈回填昵称（已存在账号不必重新登录）
+- feat(magicrew): 接入超级麦吉（Magicrew）provider
+- test(client): 补 5 条被 PR157/PR158 审计打穿的守卫牙口
+- fix(client): 修 PR158 审计打穿的 lockTitle 语义 + 4 处注释失真
+- fix(client): 修设置页积分行越界重叠，重写锁定积分文案
+- feat(client): 美化聚合页模型列表 —— 候选行拆四格 / 展开态高亮 / svg 箭头
+
+</details>
+
+<details>
+<summary><b>2026-10-28 · 上游升级 <code>4f582d7</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `239a7ee0e55a8d5a8392635bfbae0b939b031307` 更新到 `4f582d7233636d935b9796322bdcbbf7a746350f`。
+
+### 上游改动
+
+- fix(codearts): 「已下架」判据必须确认拿到全量目录（补 PR159 第 5 项缺口）
+- fix(expiry-sync): 终态错误类型改由调用方注入，九家续期落盘失败才真的报终态
+- fix(tencent-fingerprint): 登记 DSH `@` 文件引用说明句，修 buddy 每轮 400/11128
+- fix(codearts): 修 PR156 审计打穿的 3 个 P1 + 版本号不暴露 + 测试污染
+- fix(client): 面板入口偏好首读超时改为有界重试 —— 冷启动不再永久降级「仅侧栏」
+- fix(minimax): 测试环境拒写真实用户目录的 refresh-journal（附实证污染）
+- fix(autoclaw,minimax): 自审补两处 —— refresh() 丢失的副作用、403 口径分叉
+- fix(codearts): 续期静默死号 + 目录三处缺陷（IKQY27 / IKQ2QI 相关）
+- fix(autoclaw,minimax): 第二轮审计打穿的 P0/P1 全修 + 补齐无牙守卫
+- fix(autoclaw,minimax): 修 PR154/PR155 审计打穿的 P0/P1 —— 终态判据结构化、单飞去重、巡检回收、续错号、CAS、抢救链
+- fix(codearts): benefit 头判据只认远端集合，自愈以「本轮真带头」为前提（IKQ2QI）
+- fix(autoclaw): 补 401 按需续期这条缺失的腿（两站各一）—— options.refresh 此前从未注入，401 不续期不重发被归 AUTH，客户端替换成「API 密钥无效」；加 2 条守卫 + 变异验证 M1/M2/M3
+- feat(minimax): 续期机制重构 —— 定时批量轮换改为按需 + 60s 错峰巡检
+
+</details>
+
+<details>
 <summary><b>2026-10-27 · 上游升级 <code>239a7ee</code>（自动升级）</b></summary>
 
 ## 上游升级
