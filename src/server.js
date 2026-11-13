@@ -183,6 +183,7 @@ const STATIC_FILES = new Map([
   ["/admin", "admin.html"],
   ["/admin/", "admin.html"],
   ["/admin.css", "admin.css"],
+  ["/admin-shell.js", "admin-shell.js"],
   ["/admin-boot.js", "admin-boot.js"],
   ["/admin.js", "admin.js"],
   ["/upstream-jet-hub.js", "upstream-jet-hub.js"],
@@ -540,6 +541,7 @@ export async function createHttpServer(host, options = {}) {
    * 请求体直接用 node 的 req 流式透传（不缓冲）；响应体流式回写以保住 SSE。
    */
   async function proxyToGateway(request, response, url) {
+    const startedAt = Date.now()
     const target = await resolveGatewayTarget()
     const headers = new Headers()
     for (const [key, value] of Object.entries(request.headers)) {
@@ -671,6 +673,7 @@ export async function createHttpServer(host, options = {}) {
           callerGroup: gateEntry?.group,
           model: gateModel,
           path: url.pathname,
+          startedAt,
           stream: String(upstream.headers.get("content-type") ?? "").includes("event-stream"),
         })
       : stream
@@ -900,7 +903,7 @@ export async function createHttpServer(host, options = {}) {
           body = await readFile(target)
         } catch (error) {
           if (error?.code !== "ENOENT") throw error
-          sendAdmin(response, 503, "管理界面尚未构建：请先执行 npm run build", {
+          sendAdmin(response, 503, "管理界面尚未构建：请先执行 pnpm run build", {
             "content-type": "text/plain; charset=utf-8",
           })
           return

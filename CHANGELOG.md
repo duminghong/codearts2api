@@ -7,6 +7,199 @@
 ---
 
 <details open>
+<summary><b>2026-11-12 · 修复自动升级失败：安装改用 pnpm（上游 lock 与 npm 解析漂移）</b></summary>
+
+## 问题
+
+定时任务「升级上游依赖」（run 43171949923）在「安装依赖」步骤失败（exit 2）。根因是**依赖漂移**，与业务代码无关：
+
+- 上游 `dsh-providers-hub` 是 git 依赖，自身用 `pnpm-lock.yaml` 把 `@deepseek-ai/dsh-llm` 锁在 `0.2.2-rc.1`；
+- npm 不读上游 pnpm-lock，按宽松 peer 范围解析到 registry 上 **`0.2.2-rc.2`**（2026-11-12 09:53 刚发布）；
+- 该版本把失败码枚举从 `QUOTA_EXCEEDED` / `PERMISSION_DENIED` / `QUEUE` 改名成 `QUOTA` / `ACCOUNT_QUOTA` / …，
+  而上游源码仍写旧名 ⇒ `tsc` 报上百条 `TS2345` ⇒ git 依赖 `prepare` 失败 ⇒ `npm install` 退出码 2。
+
+## 修复
+
+安装方式从 npm 切换为 **pnpm**（pnpm 安装 git 依赖时会遵循上游自带的 pnpm-lock）：
+
+- 新增 `pnpm-workspace.yaml`：`allowBuilds` 放行 `dsh-providers-hub` 的 prepare 与 `esbuild` 的 postinstall
+  （git 依赖的 key 用带 commit 的精确 codeload URL，升级脚本会自动改写）；
+- `package.json`：`@deepseek-ai/dsh-*` 整族钉到 `0.2.2-rc.1`（与上游 lock 一致），`cordis` → `4.1.0`，
+  `dsh-providers-hub` → `5581d40`；删除 `package-lock.json`，改用 `pnpm-lock.yaml`；
+- `Dockerfile`：`pnpm install --frozen-lockfile` / `pnpm run build`；
+- `.github/workflows/upgrade-upstream.yml`：安装步骤改 `pnpm install --frozen-lockfile`；
+- `scripts/upgrade-upstream.mjs`：改为 `pnpm install --no-frozen-lockfile`、读 `pnpm-lock.yaml`、
+  同步改写 `pnpm-workspace.yaml` 的 allowBuilds URL、`pnpm test` / `pnpm run lint` / `pnpm exec prettier`；
+- `.prettierignore` 排除 `pnpm-lock.yaml`；`README` / `AGENTS` 同步为 pnpm 命令。
+
+## 验证
+
+- `pnpm install` exit 0；上游 `dsh-providers-hub` 的 `prepare`（tsc）编译通过；
+- `pnpm run build` 通过；`pnpm test` **81/81 通过**；`pnpm run lint`、`pnpm run format:check` 干净。
+
+</details>
+
+<details>
+<summary><b>2026-11-11 · 上游升级 <code>5e75512</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `1d12f80e14bde6c73e86aa7f5eef6257d6fe0d0b` 更新到 `5e75512428bccbae51e12951696d15510f0dbd9f`。
+
+### 上游改动
+
+- chore(deps): 适配 dsh 0.2.2-rc.1（peer/devDeps 枚举并集 + cordis ~4.1.0）
+- docs: 修正 README「走余额分档 14 家」（PR #183 留下的自相矛盾）
+- docs: 新增 docs/agent-notes/providers-marvis.md（腾讯 Marvis 实测笔记）
+- docs: 补齐 Marvis 及其余 10 家渠道到 README 渠道表（18→29）
+
+</details>
+
+<details>
+<summary><b>2026-11-10 · 调用记录改版：逐条明细 / 按模型汇总重排 + 自动刷新 + 耗时计时修正</b></summary>
+
+## 逐条明细
+
+- 按天分组（「今天 · 11 月 10 日 周二」），多天查询时一眼分清是哪天；
+- 调用方显示 Key 的名字，id 降为下方小字；超管显示为「超管 · 上游网关主 key」；
+- 模型的渠道前缀（`aggregate /`）改为灰色小字，长名省略、悬停看全名；
+- 结果：成功显示「✓ 成功」；失败整行淡红底，显示状态码 + 中文原因（如「502 被限流」，常见 `error_code` 译成中文，未知的原样显示）；
+- 耗时下方加细条（按本页最慢的一次为满格，≥ 10 秒橙色、失败红色）；
+- token 拆成「输入」「输出」两列；「方式」保留为单独一列，流式 / 一次性用不同标签；
+- 手机宽度改为卡片布局，不再横向滑动。
+
+## 按模型汇总
+
+- 调用次数放大，失败数红字另起一行；token 分「输入 / 输出」两行；平均耗时加细条；
+- 「谁在调」显示 Key 名字标签：左右分栏时显示调用最多的 1 个 + 「+N」，上下排列时最多 3 个，悬停「+N」看其余；
+- 超过 12 个模型时在末尾注明「另有 N 个模型调用较少，未列出」；手机宽度改为卡片布局。
+
+## 自动刷新
+
+- 「调用记录」页签每 15 秒按**已生效**的筛选条件刷新，右上角显示状态与「暂停 / 继续」，暂停状态记在浏览器 localStorage；
+- 以下情况自动暂停、条件解除后恢复：改了筛选还没点「查询」、日期下拉展开、切到其它页签或页面、浏览器标签页在后台；
+- **增量更新，不整块重画**：没有新数据时完全不动 DOM；有新数据时只插入新行（短暂高亮并标「新」）、移除超出条数的旧行，其余行保持原 DOM 节点；滚动位置按锚点行保持。
+
+## 耗时计时修正
+
+- 用量日志里的 `ms` 原先从「上游开始回传」算起，非流式调用几乎都记成 0~1 ms；改为从请求进入 `/v1/*` 代理时算起，到最后一个字节回完为止。
+
+## 布局
+
+- 版心（总览、调用方及顶栏共用）由 1280px 放宽到 1680px，两页切换时宽度一致、顶栏与内容边缘对齐；「调用记录」左右分栏比例 1 : 1.4，窄于 1500px 时上下排列；
+- 两张表改为固定列宽：模型、调用方等长文本按列宽截断、悬停看全文，任何数据都不会撑出横向滚动；
+- 模型格改为两行：上面模型名、下面渠道（与调用方「名字 + id」同一写法），2K / 1920 / 1600 宽度下用真实流水实测模型名都能完整显示；
+- 手机宽度：日期选择独占一行、按钮铺满，展开时把下方筛选项往下推而不是盖住（修掉日期按钮溢出遮住「调用方」的老问题）。
+
+## 测试
+
+- `admin-shell.test.mjs` 新增 4 条（明细渲染、增量刷新保留 DOM 节点、各暂停条件、暂停状态持久化），`caller-gate.test.mjs` 新增 1 条（耗时含响应前等待）。
+
+</details>
+
+<details>
+<summary><b>2026-11-10 · 上游升级 <code>1d12f80</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `9c04c56d4beea6822214952b9cda642c0835db47` 更新到 `1d12f80e14bde6c73e86aa7f5eef6257d6fe0d0b`。
+
+### 上游改动
+
+- fix(marvis): 审计收尾（续期终态 / 有效期兜底 / 模型 id 归一 / 接线改行为级 / PII）
+- feat(marvis): 接入腾讯 Marvis provider（QQ / 微信 OAuth + auto 槽位 + 钱包额度）
+- fix(qoder): 企业资源包的三个边界（cap 兜底 / 到期未知 / available）
+- test(jet-hub): 补齐「严格手动顺序」的四层回归守卫（审计返工）
+- fix(qoder): 企业账号（userType=enterprise）额度在 orgResourcePackage，补解析
+- feat(jet-hub): 新增「严格手动顺序」开关，修「拖拽排序时灵时不灵」
+
+</details>
+
+<details>
+<summary><b>2026-11-10 · 管理界面改版：顶栏外壳 + 总览首页 + 深色主题 + 回调修复重做</b></summary>
+
+## 外壳与导航
+
+- `/admin` 新增顶栏：**总览**（默认首页）/ **渠道管理**（上游 Jet Hub 整页）/ **调用方** 三个一级页面，
+  地址带 `#overview` / `#channels` / `#callers`，刷新后停在原页面；
+- 本项目的入口**不再往上游页头里插按钮**（改版前取第一个 `.dim-jh-headerActions` 注入，
+  上游一调整页头就会插错位置；上游已有把页头整排搬进侧栏的 PR）；
+- 新文件 `public/admin-shell.js`（放在 `<head>`，首帧前写主题）与统一弹窗
+  `window.__c2Shell.openModal()`：遮罩、Esc / 点遮罩关闭、焦点进出、窄屏铺满。
+
+## 主题
+
+- 顶栏主题切换：跟随系统 / 浅色 / 深色（存在浏览器 localStorage，不进服务器）；
+- 深色下补齐上游用到的整套 `--dsw-alias-*` 变量；**浅色刻意不定义**，上游走自己的回退值，
+  观感与改版前一致；
+- 本项目自己的界面统一改用 `--c2-*` 设计令牌：「调用方」原先写死的 Element Plus 配色
+  （`#409eff` 等）与上游 `#1677ff` 并存成两种主色，现已统一；登录页配色与后台对齐。
+
+## 总览
+
+- 从弹窗改为首页；数据卡 `auto-fit` 排布（宽屏 6 张一行，不再有第 6 张单独掉行），窄屏两列；
+- 渠道积分明细默认折叠（汇总行与进度条常显），点开的渠道在 30 秒自动刷新后保持展开；
+- 宽表格在窄屏横向滚动；只在「总览」可见时自动刷新。
+
+## 调用方
+
+- 从弹窗改为页面：切页签时不再整体跳高度；切去别的页面再回来，停在原页签；
+- 表格在窄屏横向滚动（改版前手机上分组名缩成「o…」、说明一行一个字）；表单弹层不再超出屏幕。
+
+## 回调修复
+
+- 右下角悬浮按钮（层级 2147482000，压在所有弹窗上面）→ 顶栏入口 + 标准弹窗；
+- 三步说明「什么时候用 → 去哪复制 → 粘进来重放」；粘贴当场校验（非本机地址、端口越界直接提示，
+  「重放」不可点），显示识别出的端口与路径；
+- 结果分三种：成功（并**清空输入框里的授权码**）/ 登录服务没接受（授权码失效）/ 本机监听已关闭，
+  各配下一步；手机上铺满全屏（改版前左侧被切掉 97px，「重放」按钮看不到）。
+
+## 其它
+
+- 「可用模型」窄屏每行折成两行，模型名不再被截成「GLM-5.2 …」；去掉写死的白底；
+- 上游「网关」弹窗显示**浏览器实际访问的地址** + `/v1`（`web/admin.jsx` 给网关状态补
+  `publicUrl`，需上游支持该字段；仅在本端口开着 `/v1` 反代时补）。改版前显示的是容器内
+  监听地址 `http://0.0.0.0:8326/v1`，照抄去配客户端连不上；
+- 新增 `tests/admin-shell.test.mjs`（14 条，jsdom 里跑真实脚本）。
+
+</details>
+
+<details>
+<summary><b>2026-11-09 · 上游升级 <code>9c04c56</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `5042cec86a88c01e0061346de0b8c5d325aa2422` 更新到 `9c04c56d4beea6822214952b9cda642c0835db47`。
+
+### 上游改动
+
+- fix(jet-hub): PR #52 二审 —— 补 3 条「代码对、守卫可被静默拿掉」的行为级用例
+- fix(jet-hub): PR #52 审计返工 —— 修「黑名单不动」假文案 + 补 9 条零守卫
+- fix(magicrew): UA 收敛为真实 build 号，修「整站 405」（issue IKTPRV）
+- fix(qoder): 积分「永久」改为「到期未知」（issue IKTLMX）
+- fix(monkeycode,baizhi): 审计返工 —— 补 3 条无牙守卫 + 归因订正 + 未声明模型告警
+- feat(jet-hub): 页头按钮搬进侧边栏底部操作行 + 「设置」弹窗 + 供应商开关
+- fix(astudio): 推理网关迁移至 maas-api.cn-huabei-1.xf-yun.com/v1
+- fix(monkeycode,baizhi): 声明逐模型输出上限，修「4096 兜底 ⇒ 长回答被静默截断」
+
+</details>
+
+<details>
+<summary><b>2026-11-08 · 上游升级 <code>5042cec</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `a5b3cd10dd49c27064c1270da205ca19a5e77d0a` 更新到 `5042cec86a88c01e0061346de0b8c5d325aa2422`。
+
+### 上游改动
+
+- fix(qoder): 目录并 app 场景（QoDuck 只发布在那里）+ COSY_VERSION 抬到 1.1.79
+- fix(loomy): stream 档位白名单与声明同源（审计 #9）+ 图片覆盖表补登 + 审计 #6 已知残余登记
+- fix(loomy): 兜底表补 DeepSeek-V4.1-Flash + 目录外 id 仍声明档位（切模型即整轮失败）
+
+</details>
+
+<details>
 <summary><b>2026-11-06 · 上游升级 <code>a5b3cd1</code>（自动升级）</b></summary>
 
 ## 上游升级
