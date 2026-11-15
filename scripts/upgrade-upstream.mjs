@@ -47,6 +47,13 @@ const root = join(fileURLToPath(new URL(".", import.meta.url)), "..")
 const UPSTREAM_URL = "https://github.com/iJetLi/dsh-providers-hub.git"
 const UPSTREAM_BRANCH = "master"
 const DEP_NAME = "dsh-providers-hub"
+/**
+ * 依赖声明里用的 `owner/repo` 短名（配 `github:` 前缀用）。
+ *
+ * ⚠️ 与 `UPSTREAM_URL` 是同一仓库的两个写法，别写错：短名进 `package.json`，
+ *    完整 URL 用于 git clone / ls-remote。
+ */
+const UPSTREAM_REPO = "iJetLi/dsh-providers-hub"
 
 /**
  * DSH 基础包的包名前缀。
@@ -306,33 +313,39 @@ function pinnedBasePackages() {
 }
 
 /**
- * 扫 `node_modules/@deepseek-ai/dsh-*`，收集每个基础包的实际安装版本。
+ * 收集每个基础包**实际被使用**的安装版本。
  *
  * 用来兜住「不报错、但装歪了」的情况：pnpm 偶尔能把版本不同的基础包**都装下来**
  * （各自满足各自的 peer），听起来能跑，实际是两套互不相认的实例 ——
  * 典型症状是「服务明明装了、`ctx.get()` 却拿不到」。
  *
- * 直接读 node_modules 里每个包的 package.json，比解析 pnpm-lock 的 YAML 结构更稳
- * （pnpm-lock 的格式随版本演进，node_modules 布局则稳定）。
+ * ⚠️ **必须走 `node_modules/.pnpm` 虚拟store，不能直接扫 `node_modules/@deepseek-ai/`**
+ *    （2026-11-13 修）：顶层那些目录里混着**上一次安装留下的孤儿** ——
+ *    pnpm 换版本时会把旧包留在原地（实测装完新版本，`node_modules/@deepseek-ai/dsh-agent`
+ *    仍是旧的 `0.2.1-rc.2`，而虚拟store 里只有新的 `0.2.2-rc.1`）。
+ *    扫顶层会把这些**根本没被引用**的残留算进来，于是「lock 里整族一致、装得完全正确」
+ *    也会被误判成「装歪了」，把一次本来成功的升级卡死在自检上。
+ *
+ *    虚拟store 里的目录名是 `<name>@<version>(<peer 哈希>)` 形式，直接从**目录名**取版本，
+ *    比解析 YAML 稳（lock 格式随 pnpm 版本演进，store 布局则稳定）。
  */
 function installedBaseVersions() {
   const versions = new Map()
-  const scopeDir = join(root, "node_modules", "@deepseek-ai")
-  let names
+  const storeDir = join(root, "node_modules", ".pnpm")
+  let entries
   try {
-    names = readdirSync(scopeDir)
+    entries = readdirSync(storeDir, { withFileTypes: true })
   } catch {
     return versions
   }
-  for (const name of names) {
-    if (!name.startsWith("dsh-")) continue
-    try {
-      const pkg = JSON.parse(readFileSync(join(scopeDir, name, "package.json"), "utf8"))
-      if (!versions.has(name)) versions.set(name, new Set())
-      versions.get(name).add(pkg.version)
-    } catch {
-      // 读不到的跳过（未安装或损坏）。
-    }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    // 目录名形如 `@deepseek-ai+dsh-llm@0.2.2-rc.1(...)` 或 `deepseek-ai+dsh-llm@0.2.2-rc.1`。
+    const match = /^(?:@)?deepseek-ai\+dsh-([a-z0-9-]+)@([^()]+)/.exec(entry.name)
+    if (!match) continue
+    const [, name, version] = match
+    if (!versions.has(name)) versions.set(name, new Set())
+    versions.get(name).add(version)
   }
   return versions
 }
@@ -363,7 +376,25 @@ function restoreManifests() {
   }
 }
 
-const newSpec = `git+${UPSTREAM_URL}#${latestHash}`
+/**
+ * 依赖声明里的 spec 形式。
+ *
+ * ⚠️ **必须是 `github:<owner>/<repo>#<hash>` 简写，不能写成 `git+https://…`**（2026-11-13 修）：
+ *    两种写法 pnpm 会走**不同的解析路径**，于是 `allowBuilds` 需要的键也跟着变：
+ *
+ *    · `github:owner/repo#hash`  → pnpm 解析成 **codeload tarball**，
+ *      键 = `dsh-providers-hub@https://codeload.github.com/owner/repo/tar.gz/<hash>`；
+ *    · `git+https://…#hash`        → pnpm 走 **git 协议**，
+ *      键 = `dsh-providers-hub@git+ssh://git@github.com/owner/repo.git#<hash>`。
+ *
+ *    pnpm-workspace.yaml 的 `allowBuilds` 只认第一种那个键 ⇒ 用 `git+https://` 写 spec 时，
+ *    上游的 `prepare`（tsc 编译）会被拦下并报
+ *    `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，安装直接失败。
+ *
+ *    本仓库的依赖声明一直用的是 `github:` 简写（与 pnpm-lock.yaml 里记录的
+ *    codeload tarball 一致），所以这里必须沿用同一形式。
+ */
+const newSpec = `github:${UPSTREAM_REPO}#${latestHash}`
 packageJson.dependencies[DEP_NAME] = newSpec
 writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 log(`已更新 package.json：${newSpec}`)

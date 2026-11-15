@@ -43,6 +43,10 @@ npm-debug.log*
 
 # 上游升级脚本用来取 commit 标题的临时克隆（用完即删，残留也不该入库）
 .upgrade-upstream-tmp/
+# 手工排查上游时的临时克隆（同样用完即删）
+.upstream-probe/
+# 数据卷备份（含凭据与账号池，**绝不入库**）
+.backup-vol-*/
 
 # ── 编辑器 / 系统 ──
 .idea/

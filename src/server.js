@@ -616,7 +616,11 @@ export async function createHttpServer(host, options = {}) {
     // 未启用调用方闸门时（常态：DSH 直接用网关 Key），/v1/models 走下面的流式透传，
     // 装饰必须在流式路径里也做一次。缓冲有上限，且**任何失败都原样回写已读的字节**，
     // 绝不因为装饰功能把上游响应吞掉 —— 装饰失败宁可退回「没有渠道前缀」。
-    if (url.pathname === "/v1/models" && upstream.ok && String(upstream.headers.get("content-type") ?? "").includes("json")) {
+    if (
+      url.pathname === "/v1/models" &&
+      upstream.ok &&
+      String(upstream.headers.get("content-type") ?? "").includes("json")
+    ) {
       const declared = Number(upstream.headers.get("content-length") ?? NaN)
       if (!Number.isFinite(declared) || declared <= MODEL_DECOR_LIMIT) {
         const buffered = await upstream.arrayBuffer().catch(() => null)

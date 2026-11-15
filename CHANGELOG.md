@@ -7,6 +7,57 @@
 ---
 
 <details open>
+<summary><b>2026-11-13 · 上游升级 <code>69ea813</code> + 修复升级脚本的三个坑</b></summary>
+
+## 上游升级
+
+`dsh-providers-hub`：`5581d40` → `69ea813`（28 个 commit）。
+
+上游本段改动（按 commit 标题）：
+
+- 轮换起点支持「从上次轮换位置继续」；
+- 新增 Token 用量标签页；
+- 界面与交互若干增强。
+
+**上游契约未变**：端点路径仍是 `/api/jet-hub` 与 `/api/jet-hub/captcha-carrier`，slot 名仍是
+`settings.section`，`inject` 列表不变 ⇒ 本仓库**零业务代码改动**，只需重装依赖 + 重建前端产物。
+
+## 修复：升级脚本自身的三个坑
+
+这次升级连续失败三次，前两次都卡在脚本而不是上游，逐一修掉：
+
+1. **依赖 spec 形式写错 → 上游 prepare 被拦**
+   脚本把 `package.json` 里的依赖写成 `git+https://…#hash`，但 pnpm 对两种写法走**不同的解析路径**：
+   `github:owner/repo#hash` 解析成 **codeload tarball**（`allowBuilds` 的键是
+   `dsh-providers-hub@https://codeload.github.com/…`），而 `git+https://…#hash` 走 **git 协议**
+   （键变成 `dsh-providers-hub@git+ssh://git@github.com/…`）。仓库的 `allowBuilds` 只认前者 ⇒
+   `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，安装直接失败。已改回 `github:` 简写（本仓库一直用的形式）。
+
+2. **「基础包整族同版本」自检误判**
+   自检原本扫 `node_modules/@deepseek-ai/` 顶层目录，而那里混着**上一次安装遗留的孤儿**
+   （pnpm 换版本时旧包留在原地：装完新版本，`dsh-agent` 顶层仍是旧的 `0.2.1-rc.2`，
+   而虚拟 store 里只有新的 `0.2.2-rc.1`）。于是「lock 里整族一致、装得完全正确」也被判成「装歪了」。
+   已改为只扫 `node_modules/.pnpm` 虚拟 store（**真正被引用**的版本）。
+
+3. **本机网络**：GitHub 的 git 协议需要走系统代理（`127.0.0.1:7890`）；codeload tarball 直连可用但很慢
+   （20–25 秒），pnpm 默认 60 秒超时会被拖垮。已在**用户级** `.npmrc` 里配 `proxy` / `https-proxy` /
+   `fetch-timeout=300000` / `fetch-retries=5`（不入库，机器专属）。
+
+## 顺带清理
+
+- `.gitignore` / `.dockerignore` 排除临时克隆目录（`.upstream-probe/`、`.upgrade-upstream-tmp/`）
+  与数据卷备份（`.backup-vol-*/`，**含凭据与账号池，绝不能进镜像层**）；
+- `src/server.js` 补一次 prettier 格式化（第 619 行超长行，是上一次提交遗留的格式漂移，**纯格式、无逻辑变化**）。
+
+## 验证
+
+- `pnpm install` exit 0，上游 `prepare`（tsc）编译通过；
+- `pnpm run build` 通过；`pnpm test` **89/89 通过**；`pnpm run lint`、`pnpm run format:check` 干净；
+- 启动日志出现「上游契约核对通过：/api/jet-hub, /api/jet-hub/captcha-carrier」。
+
+</details>
+
+<details>
 <summary><b>2026-11-12 · 修复自动升级失败：安装改用 pnpm（上游 lock 与 npm 解析漂移）</b></summary>
 
 ## 问题
