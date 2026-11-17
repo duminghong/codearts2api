@@ -3,10 +3,11 @@ node_modules
 .gitignore
 *.log
 .DS_Store
-public/admin.js
-public/upstream-jet-hub.js
 /data
 # 数据卷备份含凭据与账号池，绝不能进镜像层
 .backup-vol-*
 .upstream-probe/
 .upgrade-upstream-tmp/
+dist
+dist-server
+coverage

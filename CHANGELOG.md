@@ -7,6 +7,159 @@
 ---
 
 <details open>
+<summary><b>2026-11-17 · 上游升级 <code>594ea70</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `c44f6ffb545f726da8c9add9b8173c3faa1062ce` 更新到 `594ea70ef4b3dad6a955ae72c02590b40242331b`。
+
+### 上游改动
+
+- fix(promo): 双审计返工 —— 时间字段换形 fail-closed + 两腿同判 + 三处边界统一（GitHub PR #104）
+- fix(marvis): 会话分散返工 —— 抽纯函数补行为级守卫 + 如实收窄承诺（Gitee PR #190）
+- feat(promo): 移植上游活动徽标到模型目录（GitHub #101）
+- feat(marvis): 账号池按会话分散 —— 11 个号不再「1 主 10 备」（Issue 用户报障 2026-11-17）
+- fix(codearts,marvis): 双审计返工 —— 文案按通道分流 + 三条判据腿各自独立 + 两条过宽豁免（Gitee PR #189）
+- fix(marvis): 3000101 视为上游瞬时抖动 —— 换号重发，别一口咬死
+- fix(doc): 双审计返工 —— 打包通道补详情文档 + 三条对用户说谎的措辞 + 守卫补牙（GitHub #98）
+- fix(doc): 声明 meta.detail，详情页不再回落渲染 1205 行 README（GitHub #98）
+- fix(astudio): 断流不再补假终态 + 三条边角加固（PR #99 双审计返工第二轮）
+- fix(astudio): 去掉累积差量包装器（会静默吞重复正文）+ 删死代码 + 审计纠错（GitHub PR #99 返工）
+- fix(astudio): 推理改成 Responses 协议 —— /chat/completions 恒 404 不等于前缀下线
+- fix(providers): 返工 PR #188 —— 补接线层守卫 + fold 三条运行时守卫 + 审计纠错（GitHub #97）
+- fix(providers): system 折进 messages[]，不再放请求体顶层（GitHub #97）
+- fix(marvis): 只换身份句本体，不再吞掉 system 里的约束（IKVRNK 双审计返工）
+- fix(marvis): 换掉已被上游拉黑的身份句（Gitee IKVRNK）
+- fix(codearts): 账号积分耗尽时换号 —— 判据补上真实业务码 TM.00001050
+
+</details>
+
+<details>
+<summary><b>2026-11-16 · 后端分层重构 + 管理端登录前端化</b></summary>
+
+## 变更
+
+- **后端分层**：`src` 从扁平文件拆为 `config/`（环境变量）、`core/`（home / logger / upstream / connection / fs-store / request / errors）、`host/`（宿主装配）、`http/`（安全响应 / 请求体 / 鉴权中间件）、`modules/`（auth / callers / caller-gate / dashboard / models / gateway / oauth-relay / frontend）。
+- **服务/控制器分离**：callers、models、dashboard、oauth-relay、gateway 等模块按 service（业务与存储）与 controller（HTTP 适配）拆分；callers / models 管理接口改为 REST 路由，前端 API 同步。
+- **登录前端化**：登录界面改为 `web/components/Login` + `AuthGate`；后端提供登录、会话、登出 API，页面与静态资源公开，数据/动作 API 仍受管理密钥保护。
+
+</details>
+
+<details>
+<summary><b>2026-11-16 · 上游升级 <code>c44f6ff</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `e30023432a4444ca784fedca50fa8392995bcf81` 更新到 `c44f6ffb545f726da8c9add9b8173c3faa1062ce`。
+
+### 上游改动
+
+- fix(marvis): tools 形状对齐 + 审计修正（**不是** IKVL6C 的修复）
+- test(marvis): 补接线层守卫，并按双审计把「决定性证据」降级为推断（Gitee IKVL6C 返工）
+- docs(marvis): 更正「只有 marvis 偏离」的归因 —— 实为四家同源模板的错误推论
+- fix(marvis): 工具为空时不再下发 `tools: []`，避免模型在正文臆造 DSML 标记（Gitee IKVL6C）
+
+</details>
+
+<details>
+<summary><b>2026-11-16 · 上游升级 <code>e300234</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `664db471f2e1b0a5507a6039c16162c2b11a402b` 更新到 `e30023432a4444ca784fedca50fa8392995bcf81`。
+
+### 上游改动
+
+- fix(jet-hub): 删掉按视口的 @media 上限（修 P1-1 会顺手激活它）—— 弹窗本来就够不到 172px（PR #94 对抗审计 P2-2）
+- fix(jet-hub): 账号列上下限不再被内联 style 压死 + 拆掉两条靠注释字面量通过的假绿（PR #94 正向审计）
+- fix(jet-hub): 修复被写坏的 CSS 注释（吞掉统计组兜底规则）+ 更正陈旧列宽注释（PR #94 审计）
+- feat(jet-hub): 用量面板列宽自适应 + 统计信息优先级 + 轮换起点显示真实账号名
+
+</details>
+
+<details>
+<summary><b>2026-11-16 · 迁移到 Vite+：/admin 前后端分离 + React/TS 重写 + Express/TS 后端</b></summary>
+
+## 迁移
+
+把 `/admin` 从「Node 直发静态页 + esbuild 打包的单入口 + 运行时下发的字符串脚本」重构为 **Vite+ 前后端分离**：
+
+- **前端**：Vite+（Vite/Rolldown）构建，源码在 `web/`（Vite root）：`index.html` + `main.tsx` + `pages/**`（显式路由 `web/routes.tsx`，目前同步 import、不 lazy 分包）。外壳/导航/主题/路由、总览 dashboard、调用方 callers、模型面板 models 全部用 **React + TypeScript(.tsx)** 重写；状态用 zustand、时间用 dayjs、样式用 **CSS Modules(`*.module.less`) + Less**（全局壳样式在 `App.less`，前缀 `c2a-`；组件私有 `styles.驼峰` + `clsx`）。上游 `JetHubPage` 仍以 `__ModuleLoader__` 垫片装载（`?url` 资产），`dim-jh-*` 复用上游全局样式。
+- **后端**：`src/*.js` → **`.ts`**；HTTP 改为 **Express** 路由/中间件编排（`src/http/*` 分层：security / body / admin-login / gateway / frontend）；`/v1/*` 仍以原始 handler 反代（保 SSE + caller-gate 记账）。生产托管 `dist/`（`/admin` + `/admin/assets` + SPA 200 fallback）。运行：生产 `node dist-server/index.js`（`tsc` 编译；dev 用 register）。
+- **工具链统一到 vp**：`vp build` / `vp test`（Vitest，测试全转 TS）/ `vp check`（Oxlint+Oxfmt）/ `vp fmt` 全绿；类型检查用 `pnpm run typecheck`（tsc）。路由为**显式声明**（`web/routes.tsx`，不再用 vite-plugin-pages）。
+- **构建前后端分离产物**：`pnpm run build` = 前端 `vp build`(→`dist/`) + 后端 `tsc`(→`dist-server/`，含类型检查)；生产 `node dist-server/index.js`（运行期不再依赖 `vite-plus/register`），`register` 仅用于 `pnpm dev`。
+- **依赖归类**：前端库（react/react-dom/react-router-dom/clsx/zustand/dayjs 等）移到 `devDependencies`（被打进 `dist`）；`express` 与 `@deepseek-ai/*`、`dsh-providers-hub` 在 `dependencies`。
+- 下线旧产物/脚本：`public/admin.js`、`public/upstream-jet-hub.js`、`public/admin.html/css`、`public/admin-shell.js`、`public/admin-boot.js`、`build.mjs`、`src/callers-ui.js`。
+</details>
+
+<details>
+<summary><b>2026-11-16 · 上游升级 <code>664db47</code>（自动升级）</b></summary>
+
+## 上游升级
+
+依赖从 `f6fb8dfe61a0be6deebc8b0388dff504b7242a38` 更新到 `664db471f2e1b0a5507a6039c16162c2b11a402b`。
+
+### 上游改动
+
+- fix(raccoon): 签到金额以账单为准、零证据不锁死当天、形状异常与跨日判据加固（PR #88 双审计返工）
+- fix(modelscope): 已下线名单按归一化键兜底 + 补「has no provider supported」判据（PR #92 双审计返工）
+- fix(qoder): 形态头的机器形态必须可校验，搜索腿优先级补行为级守卫（PR #91 双审计返工）
+- fix(aggregate): deepseek 的 `-1017` / `-0813` 归到对应主键（实测：无后缀在魔搭已下线）
+- fix(aggregate): deepseek-v4.1-flash 的 `-1017` 版本号变体被当成独立模型
+- fix(modelscope): 已下线的模型 id 不再进目录（实测 8 条，逐个真发请求确认）
+- feat(qoder): 补 `Cosy-MachineOS` 形态头，补齐与官方请求层的头表差异
+- fix(qoder): 出口 fetcher 判据改用构造期基线，宿主包装 fetch 不再静默跳过代理
+- fix(aggregate): autoclaw 的 Auto / Auto-Fast 不许被排除，两站共用补丁并补全书写变体（PR #89 双审计返工）
+- fix(aggregate): autoclaw 的 GLM 带渠道前缀，同一模型被拆成两条虚拟模型
+- docs(workbuddy): 能力表与笔记同步更正「国际版无签到」，并把新笔记登记进索引
+- chore: 触发 GitHub 重新检测 PR #87 的合并状态
+- fix(workbuddy): 文案兜底收窄到整句、活跃上报补 outcome 闸门与总预算（PR #87 双审计返工）
+- feat(raccoon): 接通每日签到（办公端 setting_info 结算）+ 账单改走 v2
+- feat(workbuddy): 国际版接入每日签到 + 活跃上报，修正「后端无签到接口」的误判
+- fix(marvis): 两个 system 位置走同一个清洗函数，补三条行为级守卫（PR #185 双审计返工）
+- fix(marvis): messages 里的 system 那条也要过腾讯系风控指纹改写（Issue IKVF8Z）
+- docs(buddy): TENCENT_PROVIDERS 现在有三个元素，别再把 buddy/workbuddy 当「非腾讯系」反例
+- feat(marvis): system 正文接入腾讯内容指纹脱敏（与 buddy/workbuddy 同一份表）
+- fix(jet-hub): provider.status 用无原型对象 + model.list/fullCatalogIds 安全取键（Issue #84 双审计返工）
+
+</details>
+
+<details>
+<summary><b>2026-11-16 · 修复模型筛选失效、弹窗误触关闭与复制 Key 无反应</b></summary>
+
+## 修复
+
+### 渠道管理：「筛选模型」输入后不生效（`src/models-admin.js`）
+
+`filterOf(provider)` 直接拿 provider **对象**当键，`view[对象]` 被隐式转成字符串 `"[object Object]"`。于是 input 事件把搜索词写进 `view["codearts"].q`，渲染时却读 `view["[object Object]"].q` —— 两边不是同一个格子，`q` 恒为空串，敲什么都筛全量；「可用 / 限流 / 已关闭 / 全部」页签同因失效。
+
+- 新增 `providerKey()`，把对象 / 字符串统一归一化成 provider id。
+- `mount()` 的 DOM 重建 key 里剔除搜索词：原先每敲一个字就整块重建，`<input>` 被换成新节点、焦点丢失，只能输进第一个字符。
+- 重建时把焦点与光标位置搬到新输入框 —— 定时刷新、切页签、开关模型都不再打断输入。
+
+### 调用方：表单弹窗点外面就关，容易误触（`src/callers-ui.js`）
+
+`formModal` 里 `if (e.target === wrap) done()` 把整块全屏遮罩都当成关闭区，新建分组 / 新建 Key 时点一下空白就把已填内容全丢掉。
+
+- 默认**点遮罩不关**，只认「取消 / 确定 / Esc」；底部加 `Esc 或「取消」关闭` 提示。
+- 需要旧行为时设 `window.__c2FormBackdropClose = true`；即便打开，也只认「mousedown 与 click 都落在遮罩上」的干净点击 —— 在输入框里拖选文字、拖到弹窗外松手不会再误关。
+- Esc 在捕获阶段拦截，不会连带关掉底下的面板。
+
+### 调用方：Key 建好后「复制」没反应（`src/callers-ui.js`、`src/caller-admin.js`）
+
+`navigator.clipboard` 只在**安全上下文**（https / localhost / 127.0.0.1）存在。NAS 上普遍用 `http://ip:端口` 打开，那里它是 `undefined`，`.writeText()` 抛 `TypeError` 且 Promise 的 reject 没人接 —— 表现就是「点了没反应」。
+
+- 三级兜底：异步 Clipboard API → 隐藏 textarea + `execCommand('copy')`（http 下可用）→ 全选明文并提示按 `Ctrl+C`，绝不静默失败。
+- 明文区加 `user-select: all`，点一下即全选；明文窗口的 Esc 被拦下并提示先复制，避免手快关掉永久丢失 Key。
+- 旧独立页 `/admin/callers` 的 `copySec()` 同样补上兜底。
+
+### 测试
+
+新增 `tests/models-ui.test.mjs`（筛选生效且不丢焦点 / 页签与搜索词叠加 / 切换供应商互不串味），`tests/admin-shell.test.mjs` 增 5 条（遮罩不关、开关后只认干净点击、execCommand 兜底、安全上下文优先异步 API、失败时全选提示且 Esc 不关明文窗口）。
+
+</details>
+
+<details>
 <summary><b>2026-11-15 · 上游升级 <code>f6fb8df</code>（自动升级）</b></summary>
 
 ## 上游升级
