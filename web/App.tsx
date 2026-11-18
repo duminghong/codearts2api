@@ -14,12 +14,13 @@ import { OAuthRelayFix } from "./components/OAuthRelayFix"
 import { logout } from "./api/auth"
 import { THEMES, useThemeStore } from "./store/theme"
 
-type ViewId = "overview" | "channels" | "callers"
+type ViewId = "overview" | "channels" | "callers" | "settings"
 
 const NAV: { id: ViewId; label: string; title: string }[] = [
   { id: "overview", label: "总览", title: "网关状态、今日用量、趋势、渠道余额、积分收支、模型分布、自动签到" },
   { id: "channels", label: "渠道管理", title: "各渠道账号、聚合路由、网关、备份与恢复" },
   { id: "callers", label: "调用方", title: "分组白名单、分发 Key、按 Key / 模型的用量与调用记录" },
+  { id: "settings", label: "设置", title: "运行时开关（点一下立即生效，不必重启）" },
 ]
 
 export default function App() {
@@ -46,7 +47,7 @@ export default function App() {
   const themeWrapRef = useRef<HTMLSpanElement | null>(null)
 
   const seg = location.pathname.replace(/^\//, "").split("/")[0]
-  const view: ViewId = seg === "channels" || seg === "callers" ? (seg as ViewId) : "overview"
+  const view: ViewId = seg === "channels" || seg === "callers" || seg === "settings" ? (seg as ViewId) : "overview"
 
   useEffect(() => {
     document.documentElement.setAttribute("data-c2a-view", view)

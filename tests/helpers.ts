@@ -69,6 +69,9 @@ export async function startTestApp(options = {}) {
     // 闸门（callerGate）是可选旁挂层，默认不启用；需要验证「鉴权拦截发生在
     // 转发之前」的用例把它传进来。
     callerGate: options.callerGate ?? null,
+    // 「会话开头提示」的**初始默认值**（等价于环境变量 SESSION_HINT=1）。
+    // 面板上的开关以 settings.json 为准；没传就是关。
+    sessionHint: options.sessionHint === true,
   })
   await new Promise((resolve, reject) => {
     server.once("error", reject)

@@ -43,3 +43,16 @@ export function resolveAdminAuth(env = process.env): boolean {
   if (raw === undefined || raw === "") return true
   return !["0", "false", "off", "no"].includes(raw)
 }
+
+/**
+ * 会话开头提示（默认关闭；`SESSION_HINT=1/true/on/yes` 开启）。
+ * 开启后给 /v1/chat/completions 的首轮请求注入一条 system 消息，报当前模型与渠道剩余积分。
+ *
+ * ⚠️ 这里只提供**初始默认值**：用户在 /admin 面板点过开关后以面板为准
+ *    （见 `src/modules/settings/settings.service.ts`）。改了 env 仍需重启才生效。
+ */
+export function resolveSessionHint(env = process.env): boolean {
+  const raw = env.SESSION_HINT?.trim().toLowerCase()
+  if (raw === undefined || raw === "") return false
+  return ["1", "true", "on", "yes"].includes(raw)
+}

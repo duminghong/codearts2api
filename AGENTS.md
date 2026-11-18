@@ -82,6 +82,7 @@ web/                       # 前端（Vite root，源码根）
     overview/   index.tsx · sections.tsx · Card/Cards/Section/ProviderHead.tsx · format.ts · Overview.module.less
     callers/    index.tsx · Section · GroupsTab/KeysTab/UsageTab/RecordsTab · DaysDropdown/FormModal/SecretModal · Callers.module.less
     channels/   index.tsx · ModelsPanel · ModelsPanelHost · ModelsPanel.module.less
+    settings/   index.tsx · index.module.less（运行时开关页）
 
 src/                       # 后端（Node / Express，TypeScript，按职责分层）
   index.ts                 进程入口：配置 → 装配 → 监听 → 信号退出
@@ -97,6 +98,7 @@ src/                       # 后端（Node / Express，TypeScript，按职责分
     dashboard/             dashboard.service · dashboard.controller
     models/                models.service · models.controller
     oauth-relay/           oauth-relay.service · oauth-relay.controller
+    settings/              settings.service · settings.controller（面板可改的运行时开关）
     gateway/               gateway.service · gateway.controller · gateway-key.service
     frontend/              frontend.controller
 
@@ -144,11 +146,30 @@ pnpm run format:check                          # = vp fmt --check .
 | `DSH_OPENAI_GATEWAY_PORT`    | `8326`            | 插件网关端口（只绑 `127.0.0.1`，见下）                                            |
 | `DSH_OPENAI_GATEWAY_ENABLED` | `1`               | 置 `0/false/off/no` 则**强制停用**网关（面板开关会显示被 env 阻止，且无法再打开） |
 | `DSH_OPENAI_GATEWAY_API_KEY` | 自动生成          | 网关 Bearer Key，优先于文件                                                       |
+| `SESSION_HINT`               | **关**            | 置 `1/true/on/yes` 开启「会话开头提示」：首轮聊天请求注入模型+渠道积分提示。**仅初始默认值** —— 在 `/admin` 的「设置」页点过之后以面板为准（见下） |
 | `LOG_LEVEL`                  | `info`            | `silent` / `error` / `info` / `debug`                                             |
 
 ### 状态目录
 
 状态全放在自己的目录（默认 `~/.codearts2api`），**不读写** `~/.dsh`，可以与 DSH 共存。
+
+### 可在面板改的运行时开关
+
+`/admin` 的**「设置」**页（`web/pages/settings/`）目前只有一个开关：**会话开头提示**
+（`SESSION_HINT`）。**点一下立即生效，不用重启。**
+
+优先级：**面板为准，env 只给初始默认值**。
+
+| 状态                                | 生效值                        | `source` |
+| ----------------------------------- | ----------------------------- | -------- |
+| 从没点过（无 `settings.json`）      | 跟随 `SESSION_HINT`，每次启动重读 | `env`    |
+| 点过一次（有 `settings.json`）       | **以面板为准**，env 不再干扰   | `panel`  |
+
+落盘位置 `<CODEARTS2API_HOME>/settings.json`（原子写 + `0600`）。**文件不存在就是
+「用户从没动过」** —— 所以不预先把 env 的值落盘。
+
+> ⚠️ 其余配置项**故意没搬**到面板：要么启动期才生效（端口、鉴权、密钥），要么是安全边界
+> （`CODEARTS2API_ADMIN_AUTH`）。做成界面开关只会制造「点了要重启」或「误点即裸奔」的错觉。
 
 ### 从 DSH 或旧版本迁移账号
 
@@ -301,6 +322,8 @@ server {
 4. **`/healthz` 刻意不含密钥**（只回开关、地址、模型数），可以安全地给监控用。
 5. **TLS 不在本服务范围内**：鉴权解决「谁能进」，不解决「链路上谁看得见」。
    公网部署请让反代终结 TLS，或用 Cloudflare Tunnel / Tailscale 这类隧道。
+6. **`<CODEARTS2API_HOME>/settings.json` 不含密钥**（只有开关的布尔值），但它能改运行行为，
+   所以写权限要守住（`0600`）；改它的接口同样受管理密钥保护。
 
 ## 常见问题
 
@@ -448,11 +471,13 @@ pnpm start
 备份往返、网关启停（含端口真实释放）、模型 / 供应商开关、`/v1/*` 反代（含鉴权不被绕过、
 网关不可达时的错误信封）、SSE 流式、状态目录隔离（不污染 `~/.dsh`）、凭据可读性、
 关闭后无残留文件监听、**图片输入**（附件服务装配、落盘往返与内容寻址、mime 硬校验、
-外部链接被拒、坏图报可读错）。
+外部链接被拒、坏图报可读错）、**会话开头提示**（首轮判定、幂等、fail-open、闸门关着时也注入、
+面板开关 getter 实时生效）、**设置 API**（面板优先于 env、落盘 0600、实时生效、鉴权 401）。
 **前端 UI（jsdom + @testing-library）**：OAuth 中继改写（window.open / anchor href / `.dim-jh-loginLink` 文本 /
 addedNode / characterData / 端口越界 / 幂等）、「回调修复」交互（loopback 提交、relay→loopback 还原、
 越界端口禁用、Esc 关闭、busy 时 Esc 不关）、日期下拉外部点击关闭、「查询」不吞点击、FormModal（Esc / 遮罩 / 首焦）、
-SecretModal（Esc 不关且 onClose 不被调用）、主题与自动刷新**存储 key 迁移**（c2→c2a）；以及 callers/overview 格式化纯逻辑测试；
+SecretModal（Esc 不关且 onClose 不被调用）、主题与自动刷新**存储 key 迁移**（c2→c2a）、**设置页开关**（初值 /
+乐观更新 / 以服务端值为准 / 失败回滚 / 来源如实展示）；以及 callers/overview 格式化纯逻辑测试；
 `caller-gate.test.ts` 覆盖用量日志耗时从请求进入时算起。
 
 ### 设计决策：外部图片 URL 为什么被拒

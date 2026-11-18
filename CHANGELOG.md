@@ -7,6 +7,118 @@
 ---
 
 <details open>
+<summary><b>2026-11-18 · 会话开头提示（模型 + 渠道积分）</b></summary>
+
+## 新功能
+
+`SESSION_HINT=1` 开启后，网关会给**首轮**聊天请求（`/v1/chat/completions`）在 `messages` 最前面
+注入一条 `system` 消息，报当前模型与该渠道的剩余积分：
+
+```
+[网关提示] 当前模型：trae/glm-5.1。渠道剩余积分：1200 credit。该提示由网关自动附加，无需回应。
+```
+
+### 实现
+
+- `src/modules/gateway/session-hint.service.ts`（新增）：首轮判定、积分汇总、请求体改写（纯函数 + 运行期对象）。
+- `src/modules/gateway/gateway.controller.ts`：在 `caller-gate` 已 buffer 的请求体上改写，并同步 `content-length`。
+- 积分数据复用上游 `credits.balances` RPC（与管理端仪表盘同一口径），**5 分钟 TTL 缓存 + 并发去重 + 8s 超时**。
+- 积分数值取上游 `balance.total`（**权威口径**：各**有效**包的本周期剩余之和，与 IDE 顶部
+  "Credits Balance" 一致），**不**自己按 `packages[].remaining` 求和 —— 后者会多算失效包与
+  「独立池」（如 AStudio 的星火积分，上游刻意不计入主池合计）。单位按上游
+  `normalizeCreditUnit` 归一（`credit`/`credits` 合并，`token` 单列）。
+
+### 行为约定
+
+| 场景                                     | 行为                                                        |
+| ---------------------------------------- | ----------------------------------------------------------- |
+| 首轮（`messages` 里没有 assistant 消息） | 注入提示                                                     |
+| 多轮（已有 assistant 消息）              | 不注入                                                       |
+| 客户端回传了带标记的 messages            | 幂等跳过（标记 `[网关提示]`）                                |
+| 积分查询失败 / 超时                      | **fail-open**：仍注入，只是积分写成「查询暂不可用」；请求不丢 |
+| 请求体不是合法 JSON / 不是 chat 形态    | 原样透传                                                     |
+| 开关关闭（默认）                          | 完全不动请求体                                               |
+
+### 已知边界
+
+- **网关侧看不到「会话」**，首轮是启发式判定（无 assistant 消息即视为首轮）；客户端重发首轮会重复判定。
+- 只处理 `/v1/chat/completions` 的 `messages` 数组形态；`/v1/responses` 的 `input` 形态**未支持**。
+- 积分是 5 分钟前的缓存值，且为**参考值**（非实时扣减结果）；聚合路由（`aggregate/*`）在选号前拿不到实际渠道，不注入具体积分。
+- 直连网关端口（`8326`）不经本服务，**不注入**。
+- 注入本身会多消耗几十个 token。
+
+## 修复：默认部署形态下功能不触发
+
+**首版实现把注入挂在 `caller-gate` 已 buffer 的请求体上**，而闸门**关着**（默认形态 ——
+`<CODEARTS2API_HOME>/caller-keys.json` 不存在时 `loadStore()` 返回 `null`，闸门处于 disabled）
+时 `inspect()` 只回 `{ ok: true, disabled: true }`，**不含 body**。于是注入条件
+`if (sessionHint && gateBody && …)` 永远不成立 —— **只要没配调用方 key，这个功能就是死的**。
+
+真机实测（2026-11-18）：假上游网关 + 干净的临时 home（无 `caller-keys.json`），
+首轮请求转发到上游的 body 里**没有** `[网关提示]`；建一把调用方 key 后同一请求**才有**。
+
+**修复**：`gateway.controller.ts` 在闸门没给 body 时**自己 buffer 一次**（仅当声明了
+`content-length` 且在 32MB 上限内 —— 长度不明或超限就**不碰**请求流，直接放弃注入，
+因为 `readBody` 超限会 destroy 请求流，客户端只会看到 connection reset）。
+`content-length` 同步更新（改写后 body 变长）。
+
+回归测试：`tests/session-hint-wire.test.ts` 新增「闸门关着（默认部署形态）也要注入」
+—— 已验证它**能在修复前失败**（临时回退修复后该用例红，其余 4 条仍绿）。
+
+## 新功能：开关搬进 `/admin`（点一下就生效，不必重启）
+
+原先 `SESSION_HINT` 只能靠环境变量 + 改完重启才能改。现在 `/admin` 多了一个**「设置」**页，
+上面有一个「会话开头提示」开关：**点一下立即生效**，不用重启、不用改 env。
+
+### 语义：**面板为准，env 只给初始默认值**
+
+| 状态                            | 生效值                             | `source` |
+| ------------------------------- | ---------------------------------- | -------- |
+| 从没在面板点过（无 `settings.json`） | 跟随 `SESSION_HINT` 环境变量，每次启动重读 | `env`    |
+| 在面板点过一次（有 `settings.json`）  | **以面板为准**，env 不再干扰        | `panel`  |
+
+为什么不是「env 强制优先」：那个语义下改了 env 必须重启才能改回来，与「点一下就生效」
+的诉求直接冲突。界面会如实显示当前值来自面板还是来自环境变量 —— 否则用户会以为
+改 env 就能生效。
+
+### 实现
+
+- `src/modules/settings/settings.service.ts`（新增）：落盘到 `<CODEARTS2API_HOME>/settings.json`
+  （复用 `fs-store.ts` 的原子写 + `0600`）。**文件不存在就是「用户从没动过」**，
+  所以**不预先把 env 的值落盘** —— 没动过就永远跟随 env，只有真的点过开关才写文件。
+- `src/modules/settings/settings.controller.ts`（新增）：`GET /admin/settings/api` 读、
+  `PUT /admin/settings/api/session-hint` 改。受管理密钥保护（含大小写变体兜底）。
+- `src/server.ts`：挂载路由 + 把 `sessionHintEnabled` 换成**每请求现读的 getter**。
+- `src/modules/gateway/gateway.controller.ts`：`sessionHintEnabled` 改成同时接受布尔与
+  **getter**（`() => boolean`）。开关关着时**整段跳过** —— 否则会为了「读完再原样转发」
+  而无谓地 buffer 整个请求体（SSE 长对话尤其明显）。
+- `web/pages/settings/`（新增）+ `web/api/settings.ts`（新增）：开关 UI（`role="switch"`），
+  乐观更新 + 失败回滚。
+- `/healthz` 的 `sessionHint` 改为动态回显。
+
+### 只搬这一个
+
+其余配置项要么**启动期**才生效（端口、鉴权、密钥），要么是**安全边界**
+（`CODEARTS2API_ADMIN_AUTH`）。做成界面开关只会制造「点了要重启」或「误点即裸奔」
+的错觉，所以没搬。
+
+### 顺带修掉的坑
+
+`vp fmt --write .` 会把 `public/` 下两个**压缩过的旧 bundle**（Vite 迁移前的遗留产物，
+已无人引用）展开成几万行噪声。已在 `vite.config.ts` 的 `fmt` / `lint` 忽略列表里排除
+`public/**`。
+
+### 测试
+
+- `tests/settings-api.test.ts`（9 例）：默认值 / env 跟随 / 面板优先 / 落盘 + 重启仍在 /
+  实时生效 / 坏输入 400 / 鉴权 401 + 大小写变体 / 落盘权限 0600 / 不碰 `~/.dsh`。
+- `tests/settings-switch.test.tsx`（5 例，jsdom）：初值 / 乐观更新 / 以服务端值为准 /
+  失败回滚 / 来源如实展示。
+- `tests/session-hint-wire.test.ts` 新增「面板开关（getter）：同进程内点一下就生效」。
+
+</details>
+
+<details>
 <summary><b>2026-11-17 · 上游升级 <code>594ea70</code>（自动升级）</b></summary>
 
 ## 上游升级

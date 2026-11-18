@@ -8,11 +8,13 @@ import type { RouteObject } from "react-router-dom"
 import CallersPage from "./pages/callers/index"
 import ChannelsPage from "./pages/channels/index"
 import OverviewPage from "./pages/overview/index"
+import SettingsPage from "./pages/settings/index"
 
 export const routes: RouteObject[] = [
   { path: "/", element: <Navigate to="/overview" replace /> },
   { path: "/overview", element: <OverviewPage /> },
   { path: "/channels", element: <ChannelsPage /> },
   { path: "/callers", element: <CallersPage /> },
+  { path: "/settings", element: <SettingsPage /> },
   { path: "*", element: <Navigate to="/overview" replace /> },
 ]

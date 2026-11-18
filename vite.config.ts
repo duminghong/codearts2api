@@ -45,6 +45,8 @@ export default defineConfig({
       "/admin/callers/api": "http://127.0.0.1:8080",
       "/admin/dashboard/api": "http://127.0.0.1:8080",
       "/admin/models/api": "http://127.0.0.1:8080",
+      // 设置页的运行时开关
+      "/admin/settings/api": "http://127.0.0.1:8080",
       // 回调修复：重放接口 + 中继（/relay/<port>/...）
       "/admin/oauth-relay": "http://127.0.0.1:8080",
       "/relay": "http://127.0.0.1:8080",
@@ -70,6 +72,9 @@ export default defineConfig({
       "coverage/**",
       "data/**",
       "attachments/**",
+      // public/ 是 Vite 迁移前的旧构建产物（已不再被引用，publicDir: false）。
+      // 它们是压缩过的 bundle，格式化只会把它们展开成几万行噪声。
+      "public/**",
       // 文档/配置/脚本不参与代码格式化：
       "**/*.md",
       "**/*.yml",
@@ -83,7 +88,16 @@ export default defineConfig({
   // Lint（Oxlint）：忽略产物/依赖；src 后端与新前端都在检查范围内。
   // Lint（Oxlint，非类型感知）：只做语法/风格规则；类型检查交给独立的 `pnpm run typecheck`（tsc，覆盖 web）。
   lint: {
-    ignorePatterns: ["dist/**", "dist-server/**", "node_modules/**", "coverage/**", "data/**", "attachments/**"],
+    ignorePatterns: [
+      "dist/**",
+      "dist-server/**",
+      "node_modules/**",
+      "coverage/**",
+      "data/**",
+      "attachments/**",
+      // 同 fmt：public/ 是压缩过的旧 bundle，lint 它只会刷出成百上千条无意义的告警。
+      "public/**",
+    ],
   },
   // 测试统一用 Vitest（vp test）。tests 在仓库根，用 ../tests 从 web 根指过去。
   test: {

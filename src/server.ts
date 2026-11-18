@@ -24,6 +24,8 @@ import { send, sendAdmin, sendAdminJson } from "./http/security.ts"
 import { createModelsController } from "./modules/models/models.controller.ts"
 import { createModelsService } from "./modules/models/models.service.ts"
 import { createOAuthRelay } from "./modules/oauth-relay/oauth-relay.controller.ts"
+import { createSettingsController } from "./modules/settings/settings.controller.ts"
+import { createSettingsService } from "./modules/settings/settings.service.ts"
 import { CARRIER_PATH, JET_HUB_PATH, rpcEnvelope } from "./core/upstream.ts"
 
 /** node req/res ↔ WHATWG Request/Response 适配。 */
@@ -112,12 +114,20 @@ export async function createHttpServer(host, options: any = {}) {
   const modelsService = createModelsService({ rpc: (method, payload) => adminRpc(method, payload, "models"), logger })
   const modelsAdmin = createModelsController({ service: modelsService })
 
+  // 管理端可改的运行时开关。env 只给初始默认值，用户在面板点过就以面板为准。
+  const settingsService = createSettingsService({ home: host.home, envDefault: options.sessionHint === true })
+  await settingsService.load()
+  const settingsAdmin = createSettingsController({ service: settingsService })
+
   const throttle = new LoginThrottle()
   const { proxyToGateway } = createGatewayController({
     host,
     callerGate,
     logger,
     upstreamTimeoutMs: options.upstreamTimeoutMs,
+    adminRpc,
+    // 每次请求现读，点了开关立刻生效（不必重启）。
+    sessionHintEnabled: () => settingsService.sessionHintEnabled(),
   })
   const authRouter = createAuthRouter({ adminKeyEnabled, adminKey, throttle, logger })
   const adminGuard = createAdminGuard({ adminKeyEnabled, adminKey, throttle })
@@ -145,6 +155,7 @@ export async function createHttpServer(host, options: any = {}) {
         providers: providerIds(host),
         proxyGateway,
         adminAuth: adminKeyEnabled(),
+        sessionHint: settingsService.sessionHintEnabled(),
         gateway,
       })
     }),
@@ -189,7 +200,15 @@ export async function createHttpServer(host, options: any = {}) {
   // 路由命中，但也绝不能落到 SPA；这里统一按前缀跑鉴权中间件（仍返回 401/302，而不是 200 页面）。
   const protectedApi = express.Router({ caseSensitive: false })
   protectedApi.use(
-    ["/api/jet-hub", "/relay", "/admin/callers/api", "/admin/dashboard/api", "/admin/models/api", "/admin/oauth-relay"],
+    [
+      "/api/jet-hub",
+      "/relay",
+      "/admin/callers/api",
+      "/admin/dashboard/api",
+      "/admin/models/api",
+      "/admin/oauth-relay",
+      "/admin/settings/api",
+    ],
     adminGuard,
   )
   app.use(protectedApi)
@@ -201,6 +220,7 @@ export async function createHttpServer(host, options: any = {}) {
   adminApi.use("/dashboard/api", adminGuard, dashboardAdmin.router)
   adminApi.use("/models/api", adminGuard, modelsAdmin.router)
   adminApi.use("/oauth-relay", adminGuard, oauthRelay.replayRouter)
+  adminApi.use("/settings/api", adminGuard, settingsAdmin.router)
   app.use("/admin", adminApi)
   app.use("/relay", adminGuard, oauthRelay.relayRouter)
 
