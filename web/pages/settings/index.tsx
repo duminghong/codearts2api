@@ -10,7 +10,13 @@
  */
 import { useEffect, useState } from "react"
 
-import { getSettings, setModelNameDecor, setSessionHint, type SettingsState } from "../../api/settings"
+import {
+  getSettings,
+  setModelNameDecor,
+  setSessionEndHint,
+  setSessionHint,
+  type SettingsState,
+} from "../../api/settings"
 import styles from "./index.module.less"
 
 export default function Settings({ active = true }: { active?: boolean }) {
@@ -33,7 +39,7 @@ export default function Settings({ active = true }: { active?: boolean }) {
     }
   }, [active])
 
-  async function toggle(key: "sessionHint" | "modelNameDecor", next: boolean) {
+  async function toggle(key: "sessionHint" | "sessionEndHint" | "modelNameDecor", next: boolean) {
     setBusy(true)
     setError(null)
     // 先乐观更新，失败再回滚 —— 开关的往返延迟要短到「感觉是即时的」。
@@ -43,6 +49,9 @@ export default function Settings({ active = true }: { active?: boolean }) {
       if (key === "sessionHint") {
         const out = await setSessionHint(next)
         setState((s) => (s ? { ...s, sessionHint: out.sessionHint } : s))
+      } else if (key === "sessionEndHint") {
+        const out = await setSessionEndHint(next)
+        setState((s) => (s ? { ...s, sessionEndHint: out.sessionEndHint } : s))
       } else {
         const out = await setModelNameDecor(next)
         setState((s) => (s ? { ...s, modelNameDecor: out.modelNameDecor } : s))
@@ -56,6 +65,7 @@ export default function Settings({ active = true }: { active?: boolean }) {
   }
 
   const on = state?.sessionHint === true
+  const endOn = state?.sessionEndHint === true
   const decorOn = state?.modelNameDecor === true
 
   return (
@@ -103,6 +113,40 @@ export default function Settings({ active = true }: { active?: boolean }) {
                 aria-label="会话开头提示"
                 disabled={busy || !state}
                 onClick={() => toggle("sessionHint", !on)}
+              />
+            </div>
+
+            <div className={styles.row}>
+              <div className={styles.rowMain}>
+                <div className={styles.rowTitle}>会话结尾提示</div>
+                <div className={styles.rowDesc}>
+                  在每次助手回复正文<strong>末尾</strong>
+                  追加一条提示，显示当前模型、该渠道的剩余积分，以及本次请求的 token 用量（给用户看，不发给模型）。
+                  token 用量取自上游返回的 usage；取不到时只显示模型与积分。
+                </div>
+                <div className={styles.rowMeta}>
+                  {state ? (
+                    state.sourceEndHint === "panel" ? (
+                      <>
+                        当前值来自<strong>面板设置</strong>（已覆盖环境变量）
+                      </>
+                    ) : (
+                      <>
+                        当前值来自环境变量 <code>SESSION_END_HINT</code> 的初始默认值
+                        {state.envDefaultEndHint ? "（已开启）" : "（未开启）"}
+                      </>
+                    )
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                className={styles.sw}
+                role="switch"
+                aria-checked={endOn ? "true" : "false"}
+                aria-label="会话结尾提示"
+                disabled={busy || !state}
+                onClick={() => toggle("sessionEndHint", !endOn)}
               />
             </div>
 

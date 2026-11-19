@@ -1,5 +1,5 @@
 /**
- * 会话开头提示（session hint）：在**助手回复正文的最开头**插入一条用户可见的提示，
+ * 会话提示（session hint）：在**每轮助手回复正文的最开头**插入一条用户可见的提示，
  * 报当前模型与该渠道剩余积分。默认关闭（SESSION_HINT=1 开启）。
  *
  * ## 形态
@@ -8,10 +8,10 @@
  * 客户端 UI，没法画独立横幅，所以唯一可行的形态是把文字插进助手回复正文的开头。
  * 用户能看到、能复制；代价是这段文字属于回复内容（不计入上游 usage，上游根本没见过它）。
  *
- * ## 首轮判定
+ * ## 注入判定
  *
- * 网关只见一次次独立请求，没有会话概念。判据取最保守的形态 —— messages 里一条
- * assistant 都没有 且 已有 system 不含本标记。客户端重试/多轮会自然跳过注入。
+ * 网关只见一次次独立请求，没有会话概念。只要 messages 里有 user 消息就注入
+ * （含续会话）；仅当 system 已含本标记时跳过，防异常客户端把提示回填进 system 反复叠加。
  *
  * ## 失败语义 fail-open
  *
@@ -30,18 +30,19 @@ export function buildSessionHintText(model: string, balanceText: string | null) 
 }
 
 /**
- * 判定是否「首轮」：没有 assistant 消息，且现有 system（若有）不含标记。
- * 请求体形态不认识 → false（不注入）。
+ * 判定本轮是否该注入：有 user 消息就注入（含续会话），但 system 里已带标记则跳过
+ * （防异常客户端把提示回填进 system 反复叠加）。请求体形态不认识 → false（不注入）。
  */
-export function isFirstTurnOfSession(body: any) {
+export function shouldInjectHint(body: any) {
   const messages = Array.isArray(body?.messages) ? body.messages : null
   if (!messages) return false
+  let hasUser = false
   for (const m of messages) {
     if (!m || typeof m !== "object") continue
-    if (m.role === "assistant") return false
     if (m.role === "system" && typeof m.content === "string" && m.content.includes(SESSION_HINT_MARKER)) return false
+    if (m.role === "user") hasUser = true
   }
-  return messages.length > 0
+  return hasUser
 }
 
 /**
@@ -254,39 +255,233 @@ export function createResponseHintTransform({
 }
 
 /**
+ * 结尾提示文本：当前模型 + 渠道剩余积分 + 本次 token 用量。
+ * 与开头提示共用 `[网关提示]` 标记（幂等/可过滤）；`tokenText` 抓不到时为 null（不编造）。
+ */
+export function buildSessionEndHintText(model: string, balanceText: string | null, tokenText: string | null) {
+  const parts = [`当前模型：${model}`]
+  if (balanceText) parts.push(`渠道剩余积分：${balanceText}`)
+  if (tokenText) parts.push(`本次 token 用量：${tokenText}`)
+  return `${SESSION_HINT_MARKER} ${parts.join(" · ")}。`
+}
+
+/** 从 OpenAI 口径 usage 里取「本次 token 用量」文本；抓不到返回 null（fail-open）。 */
+export function summarizeTokenUsage(usage: any): string | null {
+  if (!usage || typeof usage !== "object") return null
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = usage[k]
+      if (typeof v === "number" && Number.isFinite(v)) return v
+    }
+    return null
+  }
+  const total = pick("total_tokens", "totalTokens")
+  const input = pick("prompt_tokens", "input_tokens", "inputTokens")
+  const output = pick("completion_tokens", "output_tokens", "outputTokens")
+  if (total === null && input === null && output === null) return null
+  const t = total ?? (input ?? 0) + (output ?? 0)
+  const detail = input !== null && output !== null ? `（输入 ${input} / 输出 ${output}）` : ""
+  return `${t}${detail}`
+}
+
+/**
+ * 结尾提示响应 Transform：把提示追加到助手回复正文**末尾**。
+ *
+ * - 非流式：整段 buffer（有上限），结束时解析 JSON、取 `usage`，追加到 `message.content`；
+ * - 流式：逐帧透传，边看边抓 usage 与首帧 id/model；在 `[DONE]` 前**另起一帧**写入提示，
+ *   不改上游任何已有字节（id 沿用首帧，客户端不会丢帧）。
+ *
+ * 全程 fail-open：解析失败 / 超上限 / 抓不到 usage 都只影响提示，绝不吞请求。
+ */
+export function createEndHintTransform({
+  model,
+  balanceText,
+  isStream,
+  logger,
+}: {
+  model: string
+  balanceText: string | null
+  isStream: boolean
+  logger?: any
+}): Transform {
+  const LIMIT = 32 * 1024 * 1024
+  const suffixOf = (usage: any) => {
+    const tokenText = summarizeTokenUsage(usage)
+    if (!tokenText) return null
+    return `\n\n${buildSessionEndHintText(model, balanceText, tokenText)}`
+  }
+
+  // 非流式：整段 buffer
+  const pending: Buffer[] = []
+  let total = 0
+  let overflow = false
+
+  // 流式：帧缓冲 + 抓取
+  let buf = ""
+  let usage: any = null
+  let template: any = null
+  let injected = false
+
+  function capture(obj: any) {
+    if (!obj || typeof obj !== "object") return
+    if (!template) template = obj
+    if (obj.usage && typeof obj.usage === "object") usage = obj.usage
+  }
+
+  /** 另起一帧的提示文本（含结尾空行）；抓不到 usage 时空串（不注入）。 */
+  function hintFrameText(): string {
+    const text = suffixOf(usage)
+    if (!text) return ""
+    const base = template ?? {}
+    const frame = {
+      ...(base.id ? { id: base.id } : {}),
+      object: "chat.completion.chunk",
+      ...(base.created != null ? { created: base.created } : {}),
+      ...(base.model ? { model: base.model } : {}),
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+    }
+    return `data: ${JSON.stringify(frame)}\n\n`
+  }
+
+  function frameEnd(s: string): { at: number; len: number } {
+    const lf = s.indexOf("\n\n")
+    const crlf = s.indexOf("\r\n\r\n")
+    if (lf < 0) return crlf < 0 ? { at: -1, len: 0 } : { at: crlf, len: 4 }
+    if (crlf < 0) return { at: lf, len: 2 }
+    return lf <= crlf ? { at: lf, len: 2 } : { at: crlf, len: 4 }
+  }
+
+  function processStreamText(text: string, push: (s: string) => void) {
+    buf += text
+    for (;;) {
+      const { at, len } = frameEnd(buf)
+      if (at < 0) break
+      const rawFrame = buf.slice(0, at + len)
+      buf = buf.slice(at + len)
+      for (const line of rawFrame.replace(/\r\n/g, "\n").split("\n")) {
+        if (!line.startsWith("data:")) continue
+        const data = line.slice(5).trim()
+        if (data === "[DONE]") continue
+        try {
+          capture(JSON.parse(data))
+        } catch {
+          /* 非 JSON 帧，忽略 */
+        }
+      }
+      // ponytail: 提示帧插在 [DONE] 前：此时 usage 已到齐；多一个 delta.content 帧是
+      // OpenAI 兼容客户端的标准行为（usage 帧本身也在 finish_reason 之后）。
+      if (!injected && /\[DONE\]/.test(rawFrame)) {
+        const extra = hintFrameText()
+        if (extra) push(extra)
+        injected = true
+      }
+      push(rawFrame)
+    }
+    // ponytail: 单帧超过 32MB 就不缓冲，原样吐出（正常 chat chunk 远小于此）。
+    if (buf.length > LIMIT) {
+      push(buf)
+      buf = ""
+    }
+  }
+
+  return new Transform({
+    transform(chunk: Buffer, _enc, callback) {
+      try {
+        if (isStream) {
+          processStreamText(chunk.toString("utf8"), (s) => this.push(s))
+        } else if (overflow) {
+          this.push(chunk)
+        } else if ((total += chunk.length) > LIMIT) {
+          overflow = true
+          for (const p of pending) this.push(p)
+          pending.length = 0
+          this.push(chunk)
+        } else {
+          pending.push(chunk)
+        }
+      } catch (error) {
+        logger?.debug?.(`[session-end-hint] 响应扫描失败，原样透传：${String(error)}`)
+        this.push(chunk)
+      }
+      callback()
+    },
+    flush(callback) {
+      try {
+        if (isStream) {
+          processStreamText("\n\n", (s) => this.push(s)) // 凑齐末帧
+          if (!injected) {
+            const extra = hintFrameText()
+            if (extra) this.push(extra)
+          }
+        } else if (!overflow) {
+          const raw = Buffer.concat(pending)
+          let out = raw
+          try {
+            const obj = JSON.parse(raw.toString("utf8"))
+            usage = obj?.usage
+            const message = obj?.choices?.[0]?.message
+            const suffix = suffixOf(usage)
+            if (suffix && message && typeof message.content === "string") {
+              message.content = `${message.content}${suffix}`
+              out = Buffer.from(JSON.stringify(obj), "utf8")
+            }
+          } catch {
+            /* 形态不认识：原样透传 */
+          }
+          this.push(out)
+        }
+      } catch (error) {
+        logger?.debug?.(`[session-end-hint] 响应注入失败，原样透传：${String(error)}`)
+        if (isStream && buf) this.push(buf)
+        else if (!overflow) for (const p of pending) this.push(p)
+      }
+      callback()
+    },
+  })
+}
+
+/**
  * 组装运行期对象：积分查询（带 TTL 缓存与并发去重）+ 首轮判定 + 提示文本生成。
  *
- * `enabled` 可以是布尔常量，也可以是 **getter**（`() => boolean`）——
+ * `enabled` / `endEnabled` 可以是布尔常量，也可以是 **getter**（`() => boolean`）——
  * 管理端面板开关要能实时生效。
  */
 export function createSessionHint({
   enabled,
+  endEnabled,
   rpc,
   logger,
+  allProviders,
 }: {
   enabled: boolean | (() => boolean)
+  /** 结尾提示开关；缺省时跟随 `enabled`（纯开头提示的老调用方无需改）。 */
+  endEnabled?: boolean | (() => boolean)
   rpc: any
   logger?: any
+  /** 已注册渠道 id（aggregate 要用它汇总所有渠道）；getter 以跟随启动后的实际注册表。 */
+  allProviders?: () => string[]
 }) {
   const TTL_MS = 5 * 60 * 1000
   /** 积分查询要逐账号发网络请求（墙外渠道实测 10s+），必须限时，否则首轮请求被拖死。 */
   const RPC_TIMEOUT_MS = 8000
-  const PROVIDER_CACHE: Record<string, { at: number; text: string | null }> = {}
-  const inflight: Record<string, Promise<string | null>> = {}
+  const PROVIDER_CACHE: Record<string, { at: number; accounts: any[] | null } | undefined> = {}
+  const inflight: Record<string, Promise<any[] | null> | undefined> = {}
 
-  async function providerBalanceText(provider: string): Promise<string | null> {
+  /** 查单渠道的原始 accounts（带 TTL 缓存 + 并发去重）；失败/不支持返回 null。 */
+  async function providerAccounts(provider: string): Promise<any[] | null> {
     const hit = PROVIDER_CACHE[provider]
-    if (hit && Date.now() - hit.at < TTL_MS) return hit.text
-    if (inflight[provider]) return inflight[provider]
-    inflight[provider] = (async () => {
+    if (hit && Date.now() - hit.at < TTL_MS) return hit.accounts
+    const pending = inflight[provider]
+    if (pending) return pending
+    const task = (async () => {
       try {
         const value = await Promise.race([
           rpc("credits.balances", { provider }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), RPC_TIMEOUT_MS)),
         ])
-        const text = summarizeProviderBalance(value)
-        PROVIDER_CACHE[provider] = { at: Date.now(), text }
-        return text
+        const accounts = value && !value.error && Array.isArray(value.accounts) ? value.accounts : null
+        PROVIDER_CACHE[provider] = { at: Date.now(), accounts }
+        return accounts
       } catch (error) {
         // ponytail: 失败直接吞 —— 提示是锦上添花，不值得为它重试或报错。
         logger?.debug?.(`[session-hint] 查询 ${provider} 积分失败：${String(error)}`)
@@ -295,30 +490,63 @@ export function createSessionHint({
         delete inflight[provider]
       }
     })()
-    return inflight[provider]
+    inflight[provider] = task
+    return task
   }
 
-  /**
-   * 请求侧只做判定 + 生成提示文本（**不改写请求体** —— 提示给用户，不给模型）。
-   * @returns 首轮且开关开着时返回提示文本，否则 null。
-   */
-  async function prepare(raw: Buffer, model: string | null): Promise<string | null> {
-    const on = typeof enabled === "function" ? enabled() : enabled
-    if (!on) return null
+  /** aggregate/auto：没有自己的余额，遍历所有渠道合并 accounts 后按同一口径求和。 */
+  async function allChannelsBalanceText(): Promise<string | null> {
+    const list = (allProviders?.() ?? []).filter((p) => p && p !== "aggregate")
+    const settled = await Promise.all(list.map((p) => providerAccounts(p)))
+    const merged = settled.flatMap((a) => a ?? [])
+    return merged.length ? summarizeProviderBalance({ accounts: merged }) : null
+  }
+
+  async function balanceTextOf(provider: string | null): Promise<string | null> {
+    if (!provider) return null
+    if (provider === "aggregate") return allChannelsBalanceText()
+    const accounts = await providerAccounts(provider)
+    return accounts ? summarizeProviderBalance({ accounts }) : null
+  }
+
+  const flag = (v: boolean | (() => boolean)) => (typeof v === "function" ? v() === true : v === true)
+
+  /** 请求侧公共解析：模型 + 渠道余额；不满足注入条件返回 null。 */
+  async function resolve(raw: Buffer, model: string | null) {
+    let body: any
     try {
-      const body = JSON.parse(raw.toString("utf8"))
-      if (!isFirstTurnOfSession(body)) return null
-      const effectiveModel = model || (typeof body?.model === "string" ? body.model : null)
-      if (!effectiveModel) return null
-      const slash = effectiveModel.indexOf("/")
-      const provider = slash > 0 ? effectiveModel.slice(0, slash) : null
-      const balanceText = provider ? await providerBalanceText(provider) : null
-      return buildSessionHintText(effectiveModel, balanceText)
+      body = JSON.parse(raw.toString("utf8"))
     } catch (error) {
       logger?.debug?.(`[session-hint] 判定失败，跳过提示：${String(error)}`)
       return null
     }
+    if (!shouldInjectHint(body)) return null
+    const effectiveModel = model || (typeof body?.model === "string" ? body.model : null)
+    if (!effectiveModel) return null
+    const slash = effectiveModel.indexOf("/")
+    const provider = slash > 0 ? effectiveModel.slice(0, slash) : null
+    const balanceText = await balanceTextOf(provider)
+    return { model: effectiveModel, balanceText }
   }
 
-  return { prepare }
+  /**
+   * 请求侧只做判定 + 生成提示文本（**不改写请求体** —— 提示给用户，不给模型）。
+   * @returns 开关开着且符合条件时返回开头提示文本，否则 null。
+   */
+  async function prepare(raw: Buffer, model: string | null): Promise<string | null> {
+    if (!flag(enabled)) return null
+    const ctx = await resolve(raw, model)
+    return ctx ? buildSessionHintText(ctx.model, ctx.balanceText) : null
+  }
+
+  /**
+   * 结尾提示的请求侧准备：返回 { model, balanceText } 供响应 Transform 使用。
+   * token 用量要等响应里才有，故这里不含。
+   */
+  async function prepareEnd(raw: Buffer, model: string | null) {
+    if (!flag(endEnabled ?? enabled)) return null
+    return resolve(raw, model)
+  }
+
+  return { prepare, prepareEnd }
 }

@@ -3,8 +3,13 @@ import { Readable } from "node:stream"
 
 import { readBody } from "../../http/body.ts"
 import { sendAdminJson } from "../../http/security.ts"
-import { createGatewayTargetResolver, decorateModelsWithProvider, MODEL_DECOR_LIMIT } from "./gateway.service.ts"
-import { createResponseHintTransform, createSessionHint } from "./session-hint.service.ts"
+import {
+  createGatewayTargetResolver,
+  decorateModelsWithProvider,
+  MODEL_DECOR_LIMIT,
+  providerIds,
+} from "./gateway.service.ts"
+import { createEndHintTransform, createResponseHintTransform, createSessionHint } from "./session-hint.service.ts"
 
 /**
  * 会话提示要自己 buffer 请求体时的上限。
@@ -33,6 +38,7 @@ export function createGatewayController({
   upstreamTimeoutMs,
   adminRpc,
   sessionHintEnabled,
+  sessionEndHintEnabled,
   modelNameDecorEnabled,
 }: any) {
   const resolveGatewayTarget = createGatewayTargetResolver({ host })
@@ -45,10 +51,19 @@ export function createGatewayController({
   //    所以不能在建对象时把开关求值成常量。
   const flag = (v: any) => (typeof v === "function" ? v() === true : v === true)
   const hintOn = () => flag(sessionHintEnabled)
+  const endHintOn = () => flag(sessionEndHintEnabled)
   // 装饰开关关着时两条装饰路径都整段跳过：不缓冲、不解析，行为与「没有装饰功能」完全一致。
   const decorOn = () => flag(modelNameDecorEnabled)
   const sessionHint =
-    typeof adminRpc === "function" ? createSessionHint({ enabled: hintOn, rpc: adminRpc, logger }) : null
+    typeof adminRpc === "function"
+      ? createSessionHint({
+          enabled: hintOn,
+          endEnabled: endHintOn,
+          rpc: adminRpc,
+          logger,
+          allProviders: () => providerIds(host),
+        })
+      : null
 
   async function proxyToGateway(request: any, response: any, url: any) {
     const startedAt = Date.now()
@@ -95,7 +110,8 @@ export function createGatewayController({
     // ⚠️ 开关关着时**整段跳过**：否则会为了「读完再原样转发」而无谓地 buffer
     //    整个请求体（SSE 长对话尤其明显）。开关是每请求现读的，所以点了立刻生效。
     let hintText: string | null = null
-    if (sessionHint && hintOn() && url.pathname === "/v1/chat/completions" && hasBody) {
+    let endHintCtx: { model: string; balanceText: string | null } | null = null
+    if (sessionHint && (hintOn() || endHintOn()) && url.pathname === "/v1/chat/completions" && hasBody) {
       let body = gateBody
       if (!body) {
         // 只在**声明了长度且在上限内**时自己 buffer。
@@ -116,7 +132,8 @@ export function createGatewayController({
       // 闸门关着时 readBody 已消费请求流 → 把 buffer 放回 gateBody 供下面 fetch 转发。
       if (body) {
         gateBody = body
-        hintText = await sessionHint.prepare(body, gateModel ?? null)
+        if (hintOn()) hintText = await sessionHint.prepare(body, gateModel ?? null)
+        if (endHintOn()) endHintCtx = await sessionHint.prepareEnd(body, gateModel ?? null)
       }
     }
     // <<< session-hint
@@ -200,7 +217,7 @@ export function createGatewayController({
     })
     // 提示会插进回复正文 → body 变长，上游的 content-length 已失效。
     // 删掉让 Node 用 chunked 回写（SSE 本就没有 content-length）。
-    if (hintText) delete outHeaders["content-length"]
+    if (hintText || endHintCtx) delete outHeaders["content-length"]
     response.writeHead(upstream.status, outHeaders)
 
     if (upstream.body === null) {
@@ -226,9 +243,19 @@ export function createGatewayController({
       : stream
     // >>> session-hint（响应侧）：在助手回复正文开头插入用户可见提示。
     // 挂在 usage 记录之后：usage 看的是原始字节，计费/统计不受提示影响。
-    const finalStream = hintText
-      ? outStream.pipe(createResponseHintTransform({ hintText, isStream, logger }))
-      : outStream
+    let finalStream: any = outStream
+    if (hintText) finalStream = finalStream.pipe(createResponseHintTransform({ hintText, isStream, logger }))
+    // 结尾提示再从「已带开头提示」的流上追加；非流式两次 JSON 解析各自独立，互不干扰。
+    if (endHintCtx) {
+      finalStream = finalStream.pipe(
+        createEndHintTransform({
+          model: endHintCtx.model,
+          balanceText: endHintCtx.balanceText,
+          isStream,
+          logger,
+        }),
+      )
+    }
     finalStream.pipe(response)
   }
 

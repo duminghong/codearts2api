@@ -57,3 +57,16 @@ export function resolveSessionHint(env = process.env): boolean {
   if (raw === undefined || raw === "") return false
   return ["1", "true", "on", "yes"].includes(raw)
 }
+
+/**
+ * 会话结尾提示（默认关闭；`SESSION_END_HINT=1/true/on/yes` 开启）。
+ * 开启后在 /v1/chat/completions 的助手回复正文末尾，追加一条用户可见的
+ * 「当前模型 + 渠道剩余积分 + 本次 token 用量」提示。
+ *
+ * 与 SESSION_HINT 一样只提供初始默认值；面板点过之后以面板为准。
+ */
+export function resolveSessionEndHint(env = process.env): boolean {
+  const raw = env.SESSION_END_HINT?.trim().toLowerCase()
+  if (raw === undefined || raw === "") return false
+  return ["1", "true", "on", "yes"].includes(raw)
+}

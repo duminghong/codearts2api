@@ -37,9 +37,51 @@ test("默认：开关关闭，来源是 env（未动过面板）", async (t) => 
 
   const state = await readSettings(app)
   assert.equal(state.sessionHint, false)
+  assert.equal(state.sessionEndHint, false)
   assert.equal(state.modelNameDecor, true, "装饰默认开，保持历史行为")
   assert.equal(state.source, "env")
+  assert.equal(state.sourceEndHint, "env")
   assert.equal(state.envDefault, false)
+  assert.equal(state.envDefaultEndHint, false)
+})
+
+test("结尾提示：env 初始值 / 面板覆盖 / 落盘 / 来源独立 / 实时生效", async (t) => {
+  const app = await startTestApp({ sessionEndHint: true })
+  t.onTestFinished(() => app.close())
+
+  let state = await readSettings(app)
+  assert.equal(state.sessionEndHint, true, "env 开启应生效")
+  assert.equal(state.sourceEndHint, "env", "没动过面板时来源是 env")
+  // 结尾提示来源独立于开头提示：开头没开也没点过 → env
+  assert.equal(state.source, "env")
+
+  const before = await (await fetch(`${app.origin}/healthz`, { headers: JSON_ACCEPT })).json()
+  assert.equal(before.sessionEndHint, true)
+
+  const off = await fetch(`${app.origin}/admin/settings/api/session-end-hint`, {
+    method: "PUT",
+    headers: authed(app, { "content-type": "application/json" }),
+    body: JSON.stringify({ enabled: false }),
+  })
+  assert.equal(off.status, 200)
+  assert.equal((await off.json()).sessionEndHint, false)
+
+  const saved = JSON.parse(await readFile(join(app.home, "settings.json"), "utf8"))
+  assert.equal(saved.sessionEndHint, false)
+  assert.equal(saved.sessionHint, false, "落盘会物化全部键，不擦掉其它开关")
+
+  state = await readSettings(app)
+  assert.equal(state.sessionEndHint, false)
+  assert.equal(state.sourceEndHint, "panel", "点过后面板为准")
+
+  const after = await (await fetch(`${app.origin}/healthz`, { headers: JSON_ACCEPT })).json()
+  assert.equal(after.sessionEndHint, false, "改完立刻生效，无需重启")
+
+  await app.close()
+  const restarted = await startTestApp({ home: app.home, sessionEndHint: true })
+  t.onTestFinished(() => restarted.close())
+  const afterRestart = await readSettings(restarted)
+  assert.equal(afterRestart.sessionEndHint, false, "重启后保持面板值，不回退 env")
 })
 
 test("env 的 SESSION_HINT 只是初始默认值：没动过面板时跟随 env", async (t) => {

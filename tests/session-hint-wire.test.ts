@@ -1,7 +1,7 @@
 /**
- * 「会话开头提示」的**接线级**回归测试（HTTP 层）。
+ * 「会话提示」的**接线级**回归测试（HTTP 层）。
  *
- * 提示注入在**响应侧**：首轮请求 → 判定并生成提示文本 → 在助手回复正文开头插一段
+ * 提示注入在**响应侧**：每轮请求 → 判定并生成提示文本 → 在助手回复正文开头插一段
  * 用户可见文字。单测（session-hint.test.ts）覆盖纯函数，这里守住真正容易静默坏掉的接线：
  *
  * 1. 提示是否真的出现在**回给客户端的响应体**里（而不是只塞进发给模型的请求体）；
@@ -247,7 +247,7 @@ test("流式（SSE）：提示出现在第一个 delta 帧，其余帧与 DONE �
   }
 })
 
-test("多轮请求不注入：回复正文原样", async () => {
+test("多轮请求也注入：回复正文开头带提示", async () => {
   const upstream = await startFakeUpstream("json")
   process.env.DSH_OPENAI_GATEWAY_PORT = String(upstream.port)
   const app = await startProxy({ sessionHint: true })
@@ -257,11 +257,12 @@ test("多轮请求不注入：回复正文原样", async () => {
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "yo" },
+        { role: "user", content: "again" },
       ],
     })
     const obj = JSON.parse(await res.text())
-    assert.equal(obj.choices[0].message.content, "你好，我是助手")
-    assert.ok(!obj.choices[0].message.content.includes(HINT_MARK))
+    assert.ok(obj.choices[0].message.content.startsWith(HINT_MARK), "续会话也要带提示")
+    assert.ok(obj.choices[0].message.content.includes("你好，我是助手"))
   } finally {
     await app.close()
     await upstream.close()

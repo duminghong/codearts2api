@@ -1,5 +1,5 @@
 /**
- * 会话开头提示（首轮在**助手回复正文开头**插入用户可见文字）的回归测试。
+ * 会话提示（每轮在**助手回复正文开头**插入用户可见文字）的回归测试。
  *
  * 提示给用户看（不是给模型的 system 消息），网关控制不了客户端 UI，
  * 所以唯一形态是往回复正文最前面塞一段文字。失败模式全是静默的，
@@ -15,38 +15,40 @@ import {
   createSessionHint,
   injectHintIntoJson,
   injectHintIntoSseFrame,
-  isFirstTurnOfSession,
+  shouldInjectHint,
   summarizeProviderBalance,
 } from "../src/modules/gateway/session-hint.service.ts"
 
 const MARK = "[网关提示]"
 const HINT = `${MARK} 当前模型：trae/glm-5.1 · 渠道剩余积分：1200 credit。`
 
-test("首轮判定：没有 assistant 消息才算首轮", () => {
-  assert.equal(isFirstTurnOfSession({ messages: [{ role: "user", content: "hi" }] }), true)
+test("注入判定：每轮只要有 user 消息就注入（含续会话）", () => {
+  assert.equal(shouldInjectHint({ messages: [{ role: "user", content: "hi" }] }), true)
   assert.equal(
-    isFirstTurnOfSession({
+    shouldInjectHint({
       messages: [
         { role: "system", content: "you are a bot" },
         { role: "user", content: "hi" },
       ],
     }),
     true,
-    "有 system 但没有 assistant 仍是首轮",
+    "有 system 也注入",
   )
   assert.equal(
-    isFirstTurnOfSession({
+    shouldInjectHint({
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "yo" },
+        { role: "user", content: "again" },
       ],
     }),
-    false,
-    "有 assistant 说明是后续轮次",
+    true,
+    "续会话（有 assistant 历史）同样注入",
   )
-  assert.equal(isFirstTurnOfSession({ messages: [] }), false, "空 messages 不是首轮")
-  assert.equal(isFirstTurnOfSession({}), false, "没有 messages 字段不注入")
-  assert.equal(isFirstTurnOfSession({ messages: "not-array" }), false, "非法形态不注入")
+  assert.equal(shouldInjectHint({ messages: [] }), false, "空 messages 不注入")
+  assert.equal(shouldInjectHint({}), false, "没有 messages 字段不注入")
+  assert.equal(shouldInjectHint({ messages: "not-array" }), false, "非法形态不注入")
+  assert.equal(shouldInjectHint({ messages: [{ role: "assistant", content: "yo" }] }), false, "没有 user 不注入")
 })
 
 test("幂等：已带提示标记的请求不再注入", () => {
@@ -56,7 +58,7 @@ test("幂等：已带提示标记的请求不再注入", () => {
       { role: "user", content: "hi" },
     ],
   }
-  assert.equal(isFirstTurnOfSession(body), false)
+  assert.equal(shouldInjectHint(body), false)
 })
 
 test("提示文本：含模型与积分，查不到积分时不编造数字", () => {
@@ -211,22 +213,30 @@ test("prepare：fail-open —— RPC 失败仍返回只有模型名的提示", a
   assert.ok(!text.includes("积分"))
 })
 
-test("prepare：关闭/非首轮/坏 JSON/无模型时返回 null", async () => {
+test("prepare：关闭/无 user/坏 JSON/无模型时返回 null", async () => {
   const rpc = async () => ({ accounts: [] })
   const off = createSessionHint({ enabled: false, rpc })
   const on = createSessionHint({ enabled: true, rpc })
   const first = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
+  const noUser = Buffer.from(
+    JSON.stringify({
+      model: "trae/x",
+      messages: [{ role: "assistant", content: "yo" }],
+    }),
+  )
   const multi = Buffer.from(
     JSON.stringify({
       model: "trae/x",
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "yo" },
+        { role: "user", content: "again" },
       ],
     }),
   )
   assert.equal(await off.prepare(first, "trae/x"), null, "关闭时不提示")
-  assert.equal(await on.prepare(multi, "trae/x"), null, "多轮不提示")
+  assert.equal(await on.prepare(noUser, "trae/x"), null, "没有 user 不提示")
+  assert.ok(await on.prepare(multi, "trae/x"), "续会话有 user 要提示")
   assert.equal(await on.prepare(Buffer.from("not-json"), "trae/x"), null, "坏 JSON 不提示")
   assert.equal(
     await on.prepare(Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] })), null),
@@ -248,6 +258,25 @@ test("prepare：积分缓存 —— 同一渠道 5 分钟内只查一次", async
   await hint.prepare(raw, "trae/x")
   await hint.prepare(raw, "trae/x")
   assert.equal(calls, 1, "第二次应命中缓存")
+})
+
+test("prepare：aggregate/auto 汇总所有渠道积分（跳过自身）", async () => {
+  const seen: string[] = []
+  const hint = createSessionHint({
+    enabled: true,
+    rpc: async (_method, params) => {
+      seen.push(params.provider)
+      const totals: Record<string, number> = { trae: 7, gemini: 3, opencode: 5 }
+      return { accounts: [{ balance: { total: totals[params.provider] ?? 0, unit: "credit" } }] }
+    },
+    allProviders: () => ["aggregate", "trae", "gemini", "opencode"],
+  })
+  const raw = Buffer.from(JSON.stringify({ model: "aggregate/auto", messages: [{ role: "user", content: "hi" }] }))
+  const text = await hint.prepare(raw, "aggregate/auto")
+  assert.ok(text)
+  assert.ok(text.includes("aggregate/auto"))
+  assert.ok(text.includes("15 credit"), `应汇总三个渠道共 15，实际：${text}`)
+  assert.ok(!seen.includes("aggregate"), "不该拿 aggregate 自己去查余额")
 })
 
 // ---- createResponseHintTransform：响应流注入 ----

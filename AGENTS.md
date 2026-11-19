@@ -148,6 +148,7 @@ pnpm run format:check                          # = vp fmt --check .
 | `DSH_OPENAI_GATEWAY_ENABLED` | `1`               | 置 `0/false/off/no` 则**强制停用**网关（面板开关会显示被 env 阻止，且无法再打开） |
 | `DSH_OPENAI_GATEWAY_API_KEY` | 自动生成          | 网关 Bearer Key，优先于文件                                                       |
 | `SESSION_HINT`               | **关**            | 置 `1/true/on/yes` 开启「会话开头提示」：首轮聊天请求注入模型+渠道积分提示。**仅初始默认值** —— 在 `/admin` 的「设置」页点过之后以面板为准（见下） |
+| `SESSION_END_HINT`           | **关**            | 置 `1/true/on/yes` 开启「会话结尾提示」：助手回复正文**末尾**追加「模型 + 渠道剩余积分 + 本次 token 用量」。**仅初始默认值** —— 面板点过之后以面板为准 |
 | `LOG_LEVEL`                  | `info`            | `silent` / `error` / `info` / `debug`                                             |
 
 ### 状态目录
@@ -156,14 +157,19 @@ pnpm run format:check                          # = vp fmt --check .
 
 ### 可在面板改的运行时开关
 
-`/admin` 的**「设置」**页（`web/pages/settings/`）目前只有一个开关：**会话开头提示**
-（`SESSION_HINT`）。**点一下立即生效，不用重启。**
+`/admin` 的**「设置」**页（`web/pages/settings/`）目前有这些开关（**点一下立即生效，不用重启**）：
 
-优先级：**面板为准，env 只给初始默认值**。
+- **会话开头提示**（`SESSION_HINT`）：在助手回复**开头**显示「模型 + 渠道积分」。
+- **会话结尾提示**（`SESSION_END_HINT`）：在助手回复**末尾**追加「模型 + 渠道剩余积分 + 本次 token 用量」。
+  token 用量取自上游 `usage`（输入/输出/total），抓不到就只显示模型与积分——**绝不编造积分消耗**（上游没有逐笔积分流水接口）。
+- **模型名显示渠道前缀**：`/v1/models` 展示名带渠道前缀（默认开）。
+
+优先级：**面板为准，env 只给初始默认值**。开头/结尾两个提示的面板来源**互相独立**
+（`source` / `sourceEndHint` 各自记录是否点过）。
 
 | 状态                                | 生效值                        | `source` |
 | ----------------------------------- | ----------------------------- | -------- |
-| 从没点过（无 `settings.json`）      | 跟随 `SESSION_HINT`，每次启动重读 | `env`    |
+| 从没点过（无 `settings.json`）      | 跟随对应 env，每次启动重读    | `env`    |
 | 点过一次（有 `settings.json`）       | **以面板为准**，env 不再干扰   | `panel`  |
 
 落盘位置 `<CODEARTS2API_HOME>/settings.json`（原子写 + `0600`）。**文件不存在就是
@@ -473,7 +479,8 @@ pnpm start
 网关不可达时的错误信封）、SSE 流式、状态目录隔离（不污染 `~/.dsh`）、凭据可读性、
 关闭后无残留文件监听、**图片输入**（附件服务装配、落盘往返与内容寻址、mime 硬校验、
 外部链接被拒、坏图报可读错）、**会话开头提示**（首轮判定、幂等、fail-open、闸门关着时也注入、
-面板开关 getter 实时生效）、**设置 API**（面板优先于 env、落盘 0600、实时生效、鉴权 401）。
+面板开关 getter 实时生效）、**会话结尾提示**（末尾追加、token 用量抓取、流式 [DONE] 前注入、
+getter 实时开关）、**设置 API**（面板优先于 env、落盘 0600、实时生效、鉴权 401）。
 **前端 UI（jsdom + @testing-library）**：OAuth 中继改写（window.open / anchor href / `.dim-jh-loginLink` 文本 /
 addedNode / characterData / 端口越界 / 幂等）、「回调修复」交互（loopback 提交、relay→loopback 还原、
 越界端口禁用、Esc 关闭、busy 时 Esc 不关）、日期下拉外部点击关闭、「查询」不吞点击、FormModal（Esc / 遮罩 / 首焦）、

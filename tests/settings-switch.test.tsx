@@ -29,6 +29,35 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test("会话结尾提示开关：初值、PUT 路径、乐观更新、来源展示", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(
+      jsonResponse({
+        sessionHint: false,
+        sessionEndHint: false,
+        modelNameDecor: true,
+        source: "env",
+        sourceEndHint: "env",
+        envDefault: false,
+        envDefaultEndHint: false,
+      }),
+    )
+    .mockResolvedValueOnce(jsonResponse({ sessionEndHint: true }))
+
+  render(<Settings />)
+  const endSw = () => screen.getByRole("switch", { name: "会话结尾提示" }) as HTMLButtonElement
+  await waitFor(() => assert.equal(endSw().getAttribute("aria-checked"), "false"))
+  assert.ok(screen.getByText(/SESSION_END_HINT/))
+
+  fireEvent.click(endSw())
+  assert.equal(endSw().getAttribute("aria-checked"), "true")
+  await waitFor(() => assert.equal(endSw().hasAttribute("disabled"), false))
+  const [url, init] = fetchMock.mock.calls[1] as any[]
+  assert.equal(url, "/admin/settings/api/session-end-hint")
+  assert.deepEqual(JSON.parse(String(init.body)), { enabled: true })
+})
+
 test("读取后端状态：开关的初始值与后端一致", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ sessionHint: true, source: "env", envDefault: true }))
 
@@ -98,8 +127,8 @@ test("值的来源如实展示：面板 / 环境变量", async () => {
     jsonResponse({ sessionHint: true, source: "panel", envDefault: false }),
   )
   const { unmount } = render(<Settings />)
-  await waitFor(() => assert.ok(screen.getByText(/当前值来自/)))
-  assert.ok(screen.getByText(/面板设置/))
+  await waitFor(() => assert.ok(screen.getAllByText(/当前值来自/).length > 0))
+  assert.ok(screen.getAllByText(/面板设置/).length > 0)
   unmount()
 
   cleanup()
@@ -108,6 +137,6 @@ test("值的来源如实展示：面板 / 环境变量", async () => {
     jsonResponse({ sessionHint: false, source: "env", envDefault: true }),
   )
   render(<Settings />)
-  await waitFor(() => assert.ok(screen.getByText(/环境变量/)))
+  await waitFor(() => assert.ok(screen.getAllByText(/环境变量/).length > 0))
   assert.ok(screen.getByText(/SESSION_HINT/))
 })

@@ -39,11 +39,14 @@ export interface SettingsServiceOptions {
   home: string
   /** env 解析出的初始默认值（`SESSION_HINT`）。仅在用户**从未**动过面板时生效。 */
   envDefault?: boolean
+  /** env 解析出的结尾提示初始默认值（`SESSION_END_HINT`）。 */
+  envDefaultEndHint?: boolean
 }
 
 /** 用户从没点过的键保持 undefined，读取时回退到各自的默认值。 */
 interface SettingsCache {
   sessionHint?: boolean
+  sessionEndHint?: boolean
   modelNameDecor?: boolean
 }
 
@@ -60,6 +63,7 @@ export function createSettingsService(options: SettingsServiceOptions) {
   const home = options.home
   const file = join(home, SETTINGS_FILE)
   const envDefault = options.envDefault === true
+  const envDefaultEndHint = options.envDefaultEndHint === true
 
   /** 内存缓存：键缺失 = 用户从没动过该项（sessionHint 用 env 默认值，装饰用代码默认值）。 */
   let cache: SettingsCache = {}
@@ -73,12 +77,18 @@ export function createSettingsService(options: SettingsServiceOptions) {
     const raw = await readJson(file)
     if (!raw || typeof raw !== "object") return
     if (typeof raw.sessionHint === "boolean") cache.sessionHint = raw.sessionHint
+    if (typeof raw.sessionEndHint === "boolean") cache.sessionEndHint = raw.sessionEndHint
     if (typeof raw.modelNameDecor === "boolean") cache.modelNameDecor = raw.modelNameDecor
   }
 
   /** 同步读当前生效值：面板值优先，没动过面板就用 env 默认值。 */
   function sessionHintEnabled(): boolean {
     return cache.sessionHint ?? envDefault
+  }
+
+  /** 同步读结尾提示开关：面板值优先，没动过面板就用 env 默认值。 */
+  function sessionEndHintEnabled(): boolean {
+    return cache.sessionEndHint ?? envDefaultEndHint
   }
 
   /** 同步读装饰开关：面板值优先，没动过就是默认开。 */
@@ -88,7 +98,11 @@ export function createSettingsService(options: SettingsServiceOptions) {
 
   /** 完整当前值（含默认值）—— 落盘时用，保证改一个键不擦掉另一个。 */
   function current() {
-    return { sessionHint: sessionHintEnabled(), modelNameDecor: modelNameDecorEnabled() }
+    return {
+      sessionHint: sessionHintEnabled(),
+      sessionEndHint: sessionEndHintEnabled(),
+      modelNameDecor: modelNameDecorEnabled(),
+    }
   }
 
   /** 改开关并落盘（原子写）。返回生效后的值。 */
@@ -98,6 +112,15 @@ export function createSettingsService(options: SettingsServiceOptions) {
     await writeJsonAtomic(file, next)
     cache = next
     return next.sessionHint
+  }
+
+  /** 改结尾提示开关并落盘（原子写）。返回生效后的值。 */
+  async function setSessionEndHint(enabled: boolean): Promise<boolean> {
+    await mkdir(home, { recursive: true })
+    const next = { ...current(), sessionEndHint: enabled === true }
+    await writeJsonAtomic(file, next)
+    cache = next
+    return next.sessionEndHint
   }
 
   /** 改装饰开关并落盘（原子写）。返回生效后的值。 */
@@ -113,13 +136,27 @@ export function createSettingsService(options: SettingsServiceOptions) {
   function view() {
     return {
       sessionHint: sessionHintEnabled(),
+      sessionEndHint: sessionEndHintEnabled(),
       modelNameDecor: modelNameDecorEnabled(),
       /** sessionHint 当前值来自面板（用户点过）还是 env 默认值。 */
       source: cache.sessionHint === undefined ? "env" : "panel",
+      /** 结尾提示的值来源（独立于开头提示）。 */
+      sourceEndHint: cache.sessionEndHint === undefined ? "env" : "panel",
       /** env 提供的默认值（供界面提示「初始默认值来自环境变量」）。 */
       envDefault,
+      envDefaultEndHint,
     }
   }
 
-  return { load, sessionHintEnabled, setSessionHint, modelNameDecorEnabled, setModelNameDecor, view, file }
+  return {
+    load,
+    sessionHintEnabled,
+    setSessionHint,
+    sessionEndHintEnabled,
+    setSessionEndHint,
+    modelNameDecorEnabled,
+    setModelNameDecor,
+    view,
+    file,
+  }
 }

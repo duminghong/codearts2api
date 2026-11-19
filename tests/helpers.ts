@@ -72,6 +72,8 @@ export async function startTestApp(options = {}) {
     // 「会话开头提示」的**初始默认值**（等价于环境变量 SESSION_HINT=1）。
     // 面板上的开关以 settings.json 为准；没传就是关。
     sessionHint: options.sessionHint === true,
+    // 「会话结尾提示」初始默认值（等价 SESSION_END_HINT=1）。
+    sessionEndHint: options.sessionEndHint === true,
   })
   await new Promise((resolve, reject) => {
     server.once("error", reject)
