@@ -46,7 +46,8 @@ export function resolveAdminAuth(env = process.env): boolean {
 
 /**
  * 会话开头提示（默认关闭；`SESSION_HINT=1/true/on/yes` 开启）。
- * 开启后给 /v1/chat/completions 的首轮请求注入一条 system 消息，报当前模型与渠道剩余积分。
+ * 开启后在 /v1/chat/completions 首轮聊天的助手回复正文开头，插入一条用户可见的
+ * 「当前模型 + 渠道剩余积分」提示（不是发给模型的 system 消息）。
  *
  * ⚠️ 这里只提供**初始默认值**：用户在 /admin 面板点过开关后以面板为准
  *    （见 `src/modules/settings/settings.service.ts`）。改了 env 仍需重启才生效。

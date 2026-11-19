@@ -1,22 +1,32 @@
 /**
- * 会话开头提示（session hint）：给「首轮」聊天请求注入一条 system 消息，
+ * 会话开头提示（session hint）：在**助手回复正文的最开头**插入一条用户可见的提示，
  * 报当前模型与该渠道剩余积分。默认关闭（SESSION_HINT=1 开启）。
  *
- * 为什么是「首轮启发式」而不是真会话：网关只见一次次独立请求，没有会话概念。
- * 判据取最保守的形态 —— messages 里一条 assistant 都没有 且 已有 system 不含
- * 本标记。客户端重试/多轮会自然跳过注入，多耗的只有首轮那几十个 token。
+ * ## 形态
  *
- * 失败语义 **fail-open**：任何解析/RPC 失败都原样返回原始 body，
- * 绝不因为提示功能把请求吞掉（与 provider-name-decor 同一原则）。
+ * 提示出现在「用户看到的会话里」，不是发给模型的 system 消息 —— 网关控制不了
+ * 客户端 UI，没法画独立横幅，所以唯一可行的形态是把文字插进助手回复正文的开头。
+ * 用户能看到、能复制；代价是这段文字属于回复内容（不计入上游 usage，上游根本没见过它）。
+ *
+ * ## 首轮判定
+ *
+ * 网关只见一次次独立请求，没有会话概念。判据取最保守的形态 —— messages 里一条
+ * assistant 都没有 且 已有 system 不含本标记。客户端重试/多轮会自然跳过注入。
+ *
+ * ## 失败语义 fail-open
+ *
+ * 任何解析/RPC 失败都原样透传，绝不因为提示功能把请求或回复吞掉。
  */
 
-/** 注入消息的识别标记：既用来幂等防重复注入，也方便客户端按需过滤。 */
+import { Transform } from "node:stream"
+
+/** 注入文本的识别标记：既用于幂等，也方便用户/客户端按需过滤。 */
 export const SESSION_HINT_MARKER = "[网关提示]"
 
-/** 注入文本的生成（纯函数，测试友好）。 */
-export function buildSessionHintMessage(model: string, balanceText: string) {
-  const content = `${SESSION_HINT_MARKER} 当前模型：${model}。渠道剩余积分：${balanceText}。该提示由网关自动附加，无需回应。`
-  return { role: "system", content }
+/** 用户可见的提示文本（纯函数，测试友好）。 */
+export function buildSessionHintText(model: string, balanceText: string | null) {
+  const balance = balanceText ? ` · 渠道剩余积分：${balanceText}` : ""
+  return `${SESSION_HINT_MARKER} 当前模型：${model}${balance}。`
 }
 
 /**
@@ -51,25 +61,17 @@ export function isFirstTurnOfSession(body: any) {
  * 2. **独立池**（池名含「独立池」标记，如 AStudio 的「星火积分」）—— 上游**刻意**把它
  *    排除在主池合计之外（包名里就写明了「不参与主池合计」）。
  *
- * 上游自己的客户端也是累加 `balance.total`（`client/jet-hub.js` 的 global stats），
- * 所以跟着它走不会与管理界面出现两个口径。
- *
- * ⚠️ 单位：上游 `normalizeCreditUnit` 把除 `token` 外的单位一律归一为 `credit`
- *    （服务端实测会下发 `credit` / `credits` 两种写法）。这里照抄那套归一化，
- *    否则同一笔积分会被拆成两个数。
+ * ⚠️ 单位：上游 `normalizeCreditUnit` 把除 `token` 外的单位一律归一为 `credit`。
  */
 export function summarizeProviderBalance(balanceEntry: any) {
   if (!balanceEntry || balanceEntry.error) return null
   const accounts = Array.isArray(balanceEntry.accounts) ? balanceEntry.accounts : []
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
-  // 单位归一化：与上游 normalizeCreditUnit 同源（token 单独成组，不与积分折算）。
   const unitOf = (u: unknown) => (u === "token" ? "token" : "credit")
   const byUnit = new Map<string, { unit: string; remaining: number }>()
   for (const acc of accounts) {
     const bal = acc?.balance
     if (!bal) continue
-    // 权威口径：balance.total。没有 total 的账号（老/降级响应）才退回按包求和，
-    // 且跳过失效包与独立池 —— 与 total 的口径保持一致。
     const hasTotal = typeof bal.total === "number" && Number.isFinite(bal.total)
     if (hasTotal) {
       const unit = unitOf(bal.unit)
@@ -94,23 +96,168 @@ export function summarizeProviderBalance(balanceEntry: any) {
 }
 
 /**
- * 请求体注入（纯函数）：返回改写后的 JSON 文本；形态不认识/非 chat 形态原样返回 null。
- * 只处理 `messages` 数组形态（/v1/chat/completions 的标准形态）。
+ * 非流式响应注入：把提示加到 `choices[0].message.content` 最前面。
+ * 形态不认识 / 解析失败 → null（原样透传）。
  */
-export function injectSessionHint(body: any, model: string, balanceText: string | null) {
-  const messages = Array.isArray(body?.messages) ? body.messages : null
-  if (!messages || !isFirstTurnOfSession(body)) return null
-  const hint = buildSessionHintMessage(model, balanceText ?? "查询暂不可用")
-  const hintBody = { ...body, messages: [hint, ...messages] }
-  return JSON.stringify(hintBody)
+export function injectHintIntoJson(raw: Buffer, hintText: string): Buffer | null {
+  let obj: any
+  try {
+    obj = JSON.parse(raw.toString("utf8"))
+  } catch {
+    return null
+  }
+  const message = obj?.choices?.[0]?.message
+  if (!message || typeof message.content !== "string") return null
+  message.content = `${hintText}\n\n${message.content}`
+  return Buffer.from(JSON.stringify(obj), "utf8")
 }
 
 /**
- * 组装运行期对象：积分查询（带 TTL 缓存与并发去重）+ 请求体改写。
- * rpc 失败/超时一律吞掉返回 null，让注入退化成「只有模型名」。
+ * 流式：在第一个带 `delta` 的 SSE 数据帧前，把提示塞进 `delta.content` 最前面。
+ * 这样 id / model / object 全部沿用上游真实帧，客户端不会因为 id 不一致丢帧。
+ * 返回改写后的 data 文本；该帧不适合注入 → null（等下一帧）。
+ */
+export function injectHintIntoSseFrame(data: string, hintText: string): string | null {
+  let obj: any
+  try {
+    obj = JSON.parse(data)
+  } catch {
+    return null
+  }
+  const choice = obj?.choices?.[0]
+  const delta = choice?.delta
+  if (!choice || !delta || typeof delta !== "object") return null
+  if (delta.content != null && typeof delta.content !== "string") return null
+  const next = {
+    ...obj,
+    choices: [{ ...choice, delta: { ...delta, content: `${hintText}\n\n${delta.content ?? ""}` } }],
+  }
+  return JSON.stringify(next)
+}
+
+/** 把一帧里所有 `data:` 行替换为 newData，其余行（含末尾空行）原样保留。 */
+function rewriteDataFrame(frame: string, newData: string) {
+  const lines = frame.replace(/\r\n/g, "\n").split("\n")
+  let first = true
+  const out: string[] = []
+  for (const line of lines) {
+    if (line.startsWith("data:")) {
+      if (first) out.push(`data: ${newData}`)
+      first = false
+      continue
+    }
+    out.push(line)
+  }
+  return out.join("\n")
+}
+
+/**
+ * 响应流注入 Transform。挂在 usage 记录之后：usage 看的是原始字节，不受提示影响。
+ *
+ * - 流式：逐帧缓冲，命中第一个可注入的帧就改写，之后纯透传；
+ * - 非流式：整段 buffer（有上限），结束时一次性解析注入。
+ *
+ * 任何一步失败都把已收到的字节原样吐出（fail-open）。
+ */
+export function createResponseHintTransform({
+  hintText,
+  isStream,
+  logger,
+}: {
+  hintText: string
+  isStream: boolean
+  logger?: any
+}): Transform {
+  const LIMIT = 32 * 1024 * 1024
+  let injected = false
+  let buf = ""
+  const pending: Buffer[] = []
+  let total = 0
+  let overflow = false
+
+  function frame(chunk: string): string {
+    if (injected) return chunk
+    const data = chunk
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n")
+    if (data === "" || data === "[DONE]") return chunk
+    const next = injectHintIntoSseFrame(data, hintText)
+    if (next === null) return chunk
+    injected = true
+    return rewriteDataFrame(chunk, next)
+  }
+
+  /** 找到最早完整帧的结束位置（兼容 \n\n 与 \r\n\r\n），找不到返回 -1。 */
+  function frameEnd(s: string): { at: number; len: number } {
+    const lf = s.indexOf("\n\n")
+    const crlf = s.indexOf("\r\n\r\n")
+    if (lf < 0) return crlf < 0 ? { at: -1, len: 0 } : { at: crlf, len: 4 }
+    if (crlf < 0) return { at: lf, len: 2 }
+    return lf <= crlf ? { at: lf, len: 2 } : { at: crlf, len: 4 }
+  }
+
+  return new Transform({
+    transform(chunk: Buffer, _enc, callback) {
+      try {
+        if (isStream) {
+          buf += chunk.toString("utf8")
+          for (;;) {
+            const { at, len } = frameEnd(buf)
+            if (at < 0) break
+            const rawFrame = buf.slice(0, at + len)
+            buf = buf.slice(at + len)
+            this.push(frame(rawFrame))
+          }
+          // ponytail: 单帧超过 32MB 就不缓冲，原样吐出（正常的 chat chunk 远小于此）。
+          if (buf.length > LIMIT) {
+            this.push(buf)
+            buf = ""
+          }
+        } else {
+          if (overflow) {
+            this.push(chunk)
+          } else if ((total += chunk.length) > LIMIT) {
+            overflow = true
+            for (const p of pending) this.push(p)
+            pending.length = 0
+            this.push(chunk)
+          } else {
+            pending.push(chunk)
+          }
+        }
+      } catch (error) {
+        logger?.debug?.(`[session-hint] 响应扫描失败，原样透传：${String(error)}`)
+        this.push(chunk)
+      }
+      callback()
+    },
+    flush(callback) {
+      try {
+        if (isStream) {
+          if (buf) this.push(frame(buf))
+        } else if (!overflow) {
+          const raw = Buffer.concat(pending)
+          const rewritten = injectHintIntoJson(raw, hintText)
+          this.push(rewritten ?? raw)
+        }
+      } catch (error) {
+        logger?.debug?.(`[session-hint] 响应注入失败，原样透传：${String(error)}`)
+        if (isStream && buf) this.push(buf)
+        else if (!overflow) for (const p of pending) this.push(p)
+      }
+      callback()
+    },
+  })
+}
+
+/**
+ * 组装运行期对象：积分查询（带 TTL 缓存与并发去重）+ 首轮判定 + 提示文本生成。
  *
  * `enabled` 可以是布尔常量，也可以是 **getter**（`() => boolean`）——
- * 后者是管理端面板开关要的：用户在 /admin 点一下就生效，不必重启。
+ * 管理端面板开关要能实时生效。
  */
 export function createSessionHint({
   enabled,
@@ -152,28 +299,26 @@ export function createSessionHint({
   }
 
   /**
-   * 给已 buffer 的请求体注入提示。任何一步失败都原样返回 raw。
-   * model 可为 null：此时从 body.model 取。
-   * @returns 注入后的 Buffer（或原 raw）
+   * 请求侧只做判定 + 生成提示文本（**不改写请求体** —— 提示给用户，不给模型）。
+   * @returns 首轮且开关开着时返回提示文本，否则 null。
    */
-  async function rewrite(raw: Buffer, model: string | null): Promise<Buffer> {
+  async function prepare(raw: Buffer, model: string | null): Promise<string | null> {
     const on = typeof enabled === "function" ? enabled() : enabled
-    if (!on) return raw
+    if (!on) return null
     try {
       const body = JSON.parse(raw.toString("utf8"))
-      if (!isFirstTurnOfSession(body)) return raw
+      if (!isFirstTurnOfSession(body)) return null
       const effectiveModel = model || (typeof body?.model === "string" ? body.model : null)
-      if (!effectiveModel) return raw
+      if (!effectiveModel) return null
       const slash = effectiveModel.indexOf("/")
       const provider = slash > 0 ? effectiveModel.slice(0, slash) : null
       const balanceText = provider ? await providerBalanceText(provider) : null
-      const text = injectSessionHint(body, effectiveModel, balanceText)
-      return text === null ? raw : Buffer.from(text, "utf8")
+      return buildSessionHintText(effectiveModel, balanceText)
     } catch (error) {
-      logger?.debug?.(`[session-hint] 注入失败，原样透传：${String(error)}`)
-      return raw
+      logger?.debug?.(`[session-hint] 判定失败，跳过提示：${String(error)}`)
+      return null
     }
   }
 
-  return { rewrite }
+  return { prepare }
 }

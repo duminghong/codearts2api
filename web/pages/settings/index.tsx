@@ -76,8 +76,9 @@ export default function Settings({ active = true }: { active?: boolean }) {
               <div className={styles.rowMain}>
                 <div className={styles.rowTitle}>会话开头提示</div>
                 <div className={styles.rowDesc}>
-                  在每次会话的<strong>首轮</strong>聊天请求里，插入一条 system 消息，说明当前模型与该渠道的剩余积分。
-                  首轮判定用的是「没有 assistant 消息」这个保守启发式；提示只附加一次，不会重复打扰。
+                  在每次会话的<strong>首轮</strong>
+                  助手回复正文开头，显示一条提示，说明当前模型与该渠道的剩余积分（给用户看，不发给模型）。
+                  首轮判定用的是「没有 assistant 消息」这个保守启发式；提示只出现一次，不会重复打扰。
                 </div>
                 <div className={styles.rowMeta}>
                   {state ? (

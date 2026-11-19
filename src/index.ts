@@ -64,7 +64,7 @@ if (!adminAuth) {
 }
 if (sessionHint) {
   console.log(
-    "[codearts2api] SESSION_HINT=1：首轮聊天请求会附加「模型 + 渠道积分」提示" +
+    "[codearts2api] SESSION_HINT=1：首轮聊天会在助手回复开头显示「模型 + 渠道积分」提示" +
       "（这是初始默认值；面板上的开关以 /admin 的设置为准，可随时改、无需重启）",
   )
 }

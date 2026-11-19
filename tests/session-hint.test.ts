@@ -1,32 +1,26 @@
 /**
- * 会话开头提示（首轮注入「模型 + 渠道积分」）的回归测试。
+ * 会话开头提示（首轮在**助手回复正文开头**插入用户可见文字）的回归测试。
  *
- * ## 为什么这组测试重要
- *
- * 注入改的是**发给上游的请求体**，失败模式全是静默的：
- *
- * 1. 首轮判错 —— 多轮对话每轮都注入（白烧 token），或该注不注（功能等于没有）；
- * 2. 幂等破了 —— 客户端把上一轮带 hint 的 messages 原样回传，提示会一层层套娃；
- * 3. fail-open 破了 —— 积分查询失败把请求吞掉，网关直接不可用；
- * 4. 聚合路由注了具体渠道 —— 上游还没选号，提示里的积分是「张冠李戴」。
- *
- * ## 为什么直接单测
- *
- * 改写逻辑是纯函数（body -> body）；起 HTTP 服务只会把断言变成测 fetch 库。
+ * 提示给用户看（不是给模型的 system 消息），网关控制不了客户端 UI，
+ * 所以唯一形态是往回复正文最前面塞一段文字。失败模式全是静默的，
+ * 故这里把纯函数 + 响应流注入都覆盖。
  */
 
 import assert from "node:assert/strict"
 import { test } from "vite-plus/test"
 
 import {
-  buildSessionHintMessage,
+  buildSessionHintText,
+  createResponseHintTransform,
   createSessionHint,
-  injectSessionHint,
+  injectHintIntoJson,
+  injectHintIntoSseFrame,
   isFirstTurnOfSession,
   summarizeProviderBalance,
 } from "../src/modules/gateway/session-hint.service.ts"
 
 const MARK = "[网关提示]"
+const HINT = `${MARK} 当前模型：trae/glm-5.1 · 渠道剩余积分：1200 credit。`
 
 test("首轮判定：没有 assistant 消息才算首轮", () => {
   assert.equal(isFirstTurnOfSession({ messages: [{ role: "user", content: "hi" }] }), true)
@@ -58,33 +52,77 @@ test("首轮判定：没有 assistant 消息才算首轮", () => {
 test("幂等：已带提示标记的请求不再注入", () => {
   const body = {
     messages: [
-      { role: "system", content: `${MARK} 当前模型：x/y。渠道剩余积分：1 credit。该提示由网关自动附加，无需回应。` },
+      { role: "system", content: HINT },
       { role: "user", content: "hi" },
     ],
   }
   assert.equal(isFirstTurnOfSession(body), false)
-  assert.equal(injectSessionHint(body, "x/y", "1 credit"), null, "不该二次注入")
 })
 
-test("注入结果：system 提示在最前面，其余字段原样保留", () => {
-  const body = { model: "trae/glm-5.1", stream: true, messages: [{ role: "user", content: "hi" }] }
-  const text = injectSessionHint(body, "trae/glm-5.1", "1200 credit")
-  assert.ok(text)
-  const out = JSON.parse(text)
-  assert.equal(out.messages.length, 2)
-  assert.equal(out.messages[0].role, "system")
-  assert.ok(out.messages[0].content.includes("trae/glm-5.1"))
-  assert.ok(out.messages[0].content.includes("1200 credit"))
-  assert.deepEqual(out.messages[1], body.messages[0], "用户消息原样保留")
-  assert.equal(out.model, "trae/glm-5.1")
-  assert.equal(out.stream, true)
+test("提示文本：含模型与积分，查不到积分时不编造数字", () => {
+  const full = buildSessionHintText("trae/glm-5.1", "1200 credit")
+  assert.ok(full.startsWith(MARK))
+  assert.ok(full.includes("trae/glm-5.1"))
+  assert.ok(full.includes("1200 credit"))
+  const noBalance = buildSessionHintText("trae/glm-5.1", null)
+  assert.ok(noBalance.includes("trae/glm-5.1"))
+  assert.ok(!noBalance.includes("积分"), "查不到积分时不该出现积分字样")
 })
 
-test("积分查不到时只报模型名，不编造数字", () => {
-  const body = { messages: [{ role: "user", content: "hi" }] }
-  const out = JSON.parse(injectSessionHint(body, "trae/glm-5.1", null))
-  assert.ok(out.messages[0].content.includes("trae/glm-5.1"))
-  assert.ok(!/\d/.test(out.messages[0].content.replace(/glm-5\.1/g, "")), "查不到积分时不该出现数字余额")
+test("非流式注入：提示加到 message.content 最前面，其余字段原样", () => {
+  const raw = Buffer.from(
+    JSON.stringify({
+      id: "chatcmpl-1",
+      model: "trae/glm-5.1",
+      choices: [{ index: 0, message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    }),
+  )
+  const out = injectHintIntoJson(raw, HINT)
+  assert.ok(out)
+  const obj = JSON.parse(out.toString("utf8"))
+  assert.ok(obj.choices[0].message.content.startsWith(HINT))
+  assert.ok(obj.choices[0].message.content.endsWith("你好"))
+  assert.equal(obj.id, "chatcmpl-1")
+  assert.equal(obj.model, "trae/glm-5.1")
+  assert.deepEqual(obj.usage, { prompt_tokens: 10, completion_tokens: 5 }, "usage 不能被动")
+})
+
+test("非流式注入：形态不认识/坏 JSON 时返回 null（原样透传）", () => {
+  assert.equal(injectHintIntoJson(Buffer.from("not-json"), HINT), null)
+  assert.equal(injectHintIntoJson(Buffer.from('{"foo":1}'), HINT), null)
+  assert.equal(injectHintIntoJson(Buffer.from('{"choices":[{}]}'), HINT), null)
+  const noContent = Buffer.from(JSON.stringify({ choices: [{ message: { role: "assistant" } }] }))
+  assert.equal(injectHintIntoJson(noContent, HINT), null, "content 非字符串不注入")
+})
+
+test("流式注入：提示塞进第一个 delta.content 帧，沿用上游 id/model", () => {
+  const obj = {
+    id: "chatcmpl-1",
+    model: "trae/glm-5.1",
+    choices: [{ index: 0, delta: { role: "assistant", content: "你" }, finish_reason: null }],
+  }
+  const out = injectHintIntoSseFrame(JSON.stringify(obj), HINT)
+  assert.ok(out)
+  const next = JSON.parse(out!)
+  assert.equal(next.id, "chatcmpl-1")
+  assert.equal(next.model, "trae/glm-5.1")
+  assert.ok(next.choices[0].delta.content.startsWith(HINT))
+  assert.ok(next.choices[0].delta.content.endsWith("你"))
+  assert.deepEqual(next.choices[0].delta.role, "assistant")
+})
+
+test("流式注入：role-only 首帧（delta 无 content）也能注入", () => {
+  const obj = { id: "x", choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }
+  const out = injectHintIntoSseFrame(JSON.stringify(obj), HINT)
+  assert.ok(out)
+  assert.ok(JSON.parse(out!).choices[0].delta.content.startsWith(HINT))
+})
+
+test("流式注入：DONE / 非 JSON / 无 delta 帧返回 null", () => {
+  assert.equal(injectHintIntoSseFrame("[DONE]", HINT), null)
+  assert.equal(injectHintIntoSseFrame("not-json", HINT), null)
+  assert.equal(injectHintIntoSseFrame('{"choices":[]}', HINT), null)
 })
 
 test("积分汇总：取权威口径 balance.total，不按包求和（否则多算失效包与独立池）", () => {
@@ -93,13 +131,10 @@ test("积分汇总：取权威口径 balance.total，不按包求和（否则多
     accounts: [
       {
         balance: {
-          // 上游 total = 各**有效**包的本周期剩余之和（已过滤失效包）。
           total: 100,
           packages: [
             { name: "有效包", unit: "credit", remaining: 100, deductionEndTime: now + 60_000 },
-            // 失效包：仍在 packages 里但不可扣费，求和会多算 50。
             { name: "过期包", unit: "credit", remaining: 50, active: false },
-            // 独立池：上游刻意排除在主池合计外，求和会多算 999。
             { name: "星火积分（独立池，不参与主池合计）", unit: "credit", remaining: 999 },
           ],
         },
@@ -109,7 +144,7 @@ test("积分汇总：取权威口径 balance.total，不按包求和（否则多
   assert.equal(text, "100 credit", "必须等于 total，不能是 1149")
 })
 
-test("积分汇总：没有 total 的降级响应才退回按包求和，且跳过失效包与独立池", () => {
+test("积分汇总：没有 total 的降级响应才退回按包求和", () => {
   const now = Date.now()
   const text = summarizeProviderBalance({
     accounts: [
@@ -136,18 +171,33 @@ test("积分汇总：单位归一（credit/credits 同一单位，token 单列�
       { balance: { total: 5, unit: "token" } },
     ],
   })
-  assert.ok(text.includes("120 credit"), "credit 与 credits 必须合并成一个数")
-  assert.ok(text.includes("5 token"), "token 不与积分折算")
+  assert.ok(text!.includes("120 credit"))
+  assert.ok(text!.includes("5 token"))
 })
 
-test("积分汇总：空账本/出错时返回 null（不注积分）", () => {
+test("积分汇总：空账本/出错时返回 null", () => {
   assert.equal(summarizeProviderBalance({ accounts: [] }), null)
   assert.equal(summarizeProviderBalance({ error: "boom" }), null)
   assert.equal(summarizeProviderBalance(null), null)
   assert.equal(summarizeProviderBalance(undefined), null)
 })
 
-test("fail-open：RPC 失败时仍注入（只缺积分），请求不丢", async () => {
+// ---- prepare：请求侧判定 + 生成提示文本 ----
+
+test("prepare：首轮返回提示文本，且不改写请求体（只返回文本）", async () => {
+  const hint = createSessionHint({
+    enabled: true,
+    rpc: async () => ({ accounts: [{ balance: { total: 7, unit: "credit" } }] }),
+  })
+  const raw = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
+  const text = await hint.prepare(raw, "trae/x")
+  assert.ok(text)
+  assert.ok(text.startsWith(MARK))
+  assert.ok(text.includes("trae/x"))
+  assert.ok(text.includes("7 credit"))
+})
+
+test("prepare：fail-open —— RPC 失败仍返回只有模型名的提示", async () => {
   const hint = createSessionHint({
     enabled: true,
     rpc: async () => {
@@ -155,60 +205,115 @@ test("fail-open：RPC 失败时仍注入（只缺积分），请求不丢", asyn
     },
   })
   const raw = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
-  const out = JSON.parse((await hint.rewrite(raw, "trae/x")).toString("utf8"))
-  assert.equal(out.messages.length, 2)
-  assert.ok(out.messages[0].content.includes("trae/x"))
+  const text = await hint.prepare(raw, "trae/x")
+  assert.ok(text)
+  assert.ok(text.includes("trae/x"))
+  assert.ok(!text.includes("积分"))
 })
 
-test("fail-open：请求体不是合法 JSON 时原样透传", async () => {
-  const hint = createSessionHint({ enabled: true, rpc: async () => ({ accounts: [] }) })
-  const raw = Buffer.from("not-json")
-  const out = await hint.rewrite(raw, "trae/x")
-  assert.equal(out, raw, "解析失败必须原样返回")
-})
-
-test("关闭开关时完全不动请求体", async () => {
-  const hint = createSessionHint({ enabled: false, rpc: async () => ({ accounts: [] }) })
-  const raw = Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] }))
-  const out = await hint.rewrite(raw, "trae/x")
-  assert.equal(out, raw)
-})
-
-test("非首轮不注入", async () => {
-  const hint = createSessionHint({ enabled: true, rpc: async () => ({ accounts: [] }) })
-  const raw = Buffer.from(
+test("prepare：关闭/非首轮/坏 JSON/无模型时返回 null", async () => {
+  const rpc = async () => ({ accounts: [] })
+  const off = createSessionHint({ enabled: false, rpc })
+  const on = createSessionHint({ enabled: true, rpc })
+  const first = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
+  const multi = Buffer.from(
     JSON.stringify({
+      model: "trae/x",
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: "yo" },
       ],
     }),
   )
-  const out = await hint.rewrite(raw, "trae/x")
-  assert.equal(out, raw, "多轮请求不该被改写")
+  assert.equal(await off.prepare(first, "trae/x"), null, "关闭时不提示")
+  assert.equal(await on.prepare(multi, "trae/x"), null, "多轮不提示")
+  assert.equal(await on.prepare(Buffer.from("not-json"), "trae/x"), null, "坏 JSON 不提示")
+  assert.equal(
+    await on.prepare(Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] })), null),
+    null,
+    "无模型不提示",
+  )
 })
 
-test("积分缓存：同一渠道 5 分钟内只查一次", async () => {
+test("prepare：积分缓存 —— 同一渠道 5 分钟内只查一次", async () => {
   let calls = 0
   const hint = createSessionHint({
     enabled: true,
     rpc: async () => {
       calls += 1
-      return {
-        accounts: [{ balance: { total: 7, unit: "credit" } }],
-      }
+      return { accounts: [{ balance: { total: 7, unit: "credit" } }] }
     },
   })
-  const raw = Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] }))
-  await hint.rewrite(raw, "trae/x")
-  await hint.rewrite(raw, "trae/x")
+  const raw = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
+  await hint.prepare(raw, "trae/x")
+  await hint.prepare(raw, "trae/x")
   assert.equal(calls, 1, "第二次应命中缓存")
 })
 
-test("提示文本包含模型与积分，便于人工核对", () => {
-  const msg = buildSessionHintMessage("trae/glm-5.1", "1200 credit")
-  assert.equal(msg.role, "system")
-  assert.ok(msg.content.startsWith(MARK))
-  assert.ok(msg.content.includes("trae/glm-5.1"))
-  assert.ok(msg.content.includes("1200 credit"))
+// ---- createResponseHintTransform：响应流注入 ----
+
+async function collect(stream: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const c of stream) chunks.push(Buffer.from(c))
+  return Buffer.concat(chunks).toString("utf8")
+}
+
+test("响应 Transform（非流式）：正文开头出现提示，只注一次", async () => {
+  const body = JSON.stringify({
+    id: "c1",
+    choices: [{ index: 0, message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
+  })
+  const t = createResponseHintTransform({ hintText: HINT, isStream: false })
+  t.end(Buffer.from(body))
+  const out = await collect(t)
+  const obj = JSON.parse(out)
+  assert.ok(obj.choices[0].message.content.startsWith(HINT))
+  assert.equal((obj.choices[0].message.content.match(/\[网关提示\]/g) ?? []).length, 1)
+})
+
+test("响应 Transform（流式，LF）：第一个 delta 帧带提示，DONE 帧原样", async () => {
+  const frames = [
+    `data: ${JSON.stringify({ id: "c1", choices: [{ index: 0, delta: { role: "assistant", content: "你" }, finish_reason: null }] })}\n\n`,
+    `data: ${JSON.stringify({ id: "c1", choices: [{ index: 0, delta: { content: "好" }, finish_reason: null }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("")
+  const t = createResponseHintTransform({ hintText: HINT, isStream: true })
+  t.end(Buffer.from(frames))
+  const out = await collect(t)
+  const dataFrames = out
+    .split("\n\n")
+    .filter(Boolean)
+    .map((f) => f.replace(/^data: /, ""))
+  assert.ok(JSON.parse(dataFrames[0]).choices[0].delta.content.startsWith(HINT))
+  assert.equal(JSON.parse(dataFrames[1]).choices[0].delta.content, "好", "后续帧原样")
+  assert.equal(dataFrames[2], "[DONE]")
+})
+
+test("响应 Transform（流式，CRLF）：也能正确切帧并注入", async () => {
+  const frame = `data: ${JSON.stringify({ id: "c1", choices: [{ index: 0, delta: { role: "assistant", content: "hi" }, finish_reason: null }] })}\r\n\r\n`
+  const t = createResponseHintTransform({ hintText: HINT, isStream: true })
+  t.end(Buffer.from(frame))
+  const out = await collect(t)
+  const obj = JSON.parse(out.split("\r\n\r\n")[0].replace(/^data: /, ""))
+  assert.ok(obj.choices[0].delta.content.startsWith(HINT))
+})
+
+test("响应 Transform：跨 chunk 的半帧能正确拼接后再注入", async () => {
+  const data = JSON.stringify({
+    id: "c1",
+    choices: [{ index: 0, delta: { role: "assistant", content: "hi" }, finish_reason: null }],
+  })
+  const t = createResponseHintTransform({ hintText: HINT, isStream: true })
+  t.write(Buffer.from(`data: ${data.slice(0, 20)}`))
+  t.end(Buffer.from(`${data.slice(20)}\n\n`))
+  const out = await collect(t)
+  const obj = JSON.parse(out.replace(/^data: /, "").trim())
+  assert.ok(obj.choices[0].delta.content.startsWith(HINT))
+})
+
+test("响应 Transform：上游回复形态不认识时原样透传（fail-open）", async () => {
+  const t = createResponseHintTransform({ hintText: HINT, isStream: false })
+  const raw = '{"foo":"bar"}'
+  t.end(Buffer.from(raw))
+  assert.equal(await collect(t), raw)
 })

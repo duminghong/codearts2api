@@ -4,7 +4,7 @@ import { Readable } from "node:stream"
 import { readBody } from "../../http/body.ts"
 import { sendAdminJson } from "../../http/security.ts"
 import { createGatewayTargetResolver, decorateModelsWithProvider, MODEL_DECOR_LIMIT } from "./gateway.service.ts"
-import { createSessionHint } from "./session-hint.service.ts"
+import { createResponseHintTransform, createSessionHint } from "./session-hint.service.ts"
 
 /**
  * 会话提示要自己 buffer 请求体时的上限。
@@ -36,9 +36,9 @@ export function createGatewayController({
   modelNameDecorEnabled,
 }: any) {
   const resolveGatewayTarget = createGatewayTargetResolver({ host })
-  // 会话开头提示：/v1/chat/completions 首轮注入「模型 + 渠道积分」system 消息。
-  // 请求体的来源见下面 >>> session-hint 段：闸门开着就用闸门 buffer 的，
-  // 闸门关着（默认形态）就自己 buffer —— 两条路都得覆盖。
+  // 会话开头提示：/v1/chat/completions 首轮判定 + 生成「用户可见」提示文本，
+  // 在响应侧插进助手回复正文开头。请求体的来源见下面 >>> session-hint 段：
+  // 闸门开着就用闸门 buffer 的，闸门关着（默认形态）就自己 buffer —— 两条路都得覆盖。
   //
   // ⚠️ `sessionHintEnabled` / `modelNameDecorEnabled` 可以是布尔常量，也可以是
   //    **getter**（`() => boolean`）：管理端面板的开关要能实时生效，
@@ -83,8 +83,8 @@ export function createGatewayController({
     }
 
     // >>> session-hint
-    // 首轮聊天请求注入「模型 + 渠道积分」system 消息；失败原样透传。
-    // 改写后 body 变长，必须同步 content-length（客户端原值已失效）。
+    // 首轮聊天请求：判定 + 生成「用户可见」提示文本（**不改写请求体** —— 提示给用户，不给模型）。
+    // 提示文字在响应侧插入助手回复正文的开头（见下方 outStream 前的 hintTransform）。
     //
     // ⚠️ 请求体来源有两条路，**必须都覆盖**：
     //   1. 闸门开着 → caller-gate 已 buffer（gateBody），直接用；
@@ -94,6 +94,7 @@ export function createGatewayController({
     //
     // ⚠️ 开关关着时**整段跳过**：否则会为了「读完再原样转发」而无谓地 buffer
     //    整个请求体（SSE 长对话尤其明显）。开关是每请求现读的，所以点了立刻生效。
+    let hintText: string | null = null
     if (sessionHint && hintOn() && url.pathname === "/v1/chat/completions" && hasBody) {
       let body = gateBody
       if (!body) {
@@ -106,20 +107,16 @@ export function createGatewayController({
           try {
             body = await readBody(request, HINT_BODY_LIMIT)
           } catch (error) {
-            // 读不动就放弃注入，原样透传（fail-open）。提示是锦上添花，
-            // 读体失败不该影响正常对话。
-            logger?.debug?.(`[session-hint] 读取请求体失败，跳过注入：${String(error)}`)
+            // 读不动就放弃，原样透传（fail-open）。提示是锦上添花。
+            logger?.debug?.(`[session-hint] 读取请求体失败，跳过提示：${String(error)}`)
             body = undefined
           }
         }
       }
+      // 闸门关着时 readBody 已消费请求流 → 把 buffer 放回 gateBody 供下面 fetch 转发。
       if (body) {
-        const rewritten = await sessionHint.rewrite(body, gateModel ?? null)
-        if (rewritten !== body) {
-          body = rewritten
-          headers.set("content-length", String(body.length))
-        }
         gateBody = body
+        hintText = await sessionHint.prepare(body, gateModel ?? null)
       }
     }
     // <<< session-hint
@@ -195,11 +192,15 @@ export function createGatewayController({
     }
     // <<< provider-name-decor
 
+    const isStream = String(upstream.headers.get("content-type") ?? "").includes("event-stream")
     const outHeaders: any = {}
     upstream.headers.forEach((value: string, key: string) => {
       if (HOP_BY_HOP.has(key.toLowerCase())) return
       outHeaders[key] = value
     })
+    // 提示会插进回复正文 → body 变长，上游的 content-length 已失效。
+    // 删掉让 Node 用 chunked 回写（SSE 本就没有 content-length）。
+    if (hintText) delete outHeaders["content-length"]
     response.writeHead(upstream.status, outHeaders)
 
     if (upstream.body === null) {
@@ -220,10 +221,15 @@ export function createGatewayController({
           model: gateModel,
           path: url.pathname,
           startedAt,
-          stream: String(upstream.headers.get("content-type") ?? "").includes("event-stream"),
+          stream: isStream,
         })
       : stream
-    outStream.pipe(response)
+    // >>> session-hint（响应侧）：在助手回复正文开头插入用户可见提示。
+    // 挂在 usage 记录之后：usage 看的是原始字节，计费/统计不受提示影响。
+    const finalStream = hintText
+      ? outStream.pipe(createResponseHintTransform({ hintText, isStream, logger }))
+      : outStream
+    finalStream.pipe(response)
   }
 
   return { proxyToGateway }
