@@ -314,10 +314,12 @@ export function createEndHintTransform({
   logger?: any
 }): Transform {
   const LIMIT = 32 * 1024 * 1024
+  // 显示优先用响应里实际命中的模型；请求模型（如 aggregate/auto）只在响应没带 model 时回退。
+  let resolvedModel = model
   const suffixOf = (usage: any) => {
     const tokenText = summarizeTokenUsage(usage)
     if (!tokenText) return null
-    return `\n\n${buildSessionEndHintText(model, balanceText, tokenText)}`
+    return `\n\n${buildSessionEndHintText(resolvedModel, balanceText, tokenText)}`
   }
 
   // 非流式：整段 buffer
@@ -334,6 +336,7 @@ export function createEndHintTransform({
   function capture(obj: any) {
     if (!obj || typeof obj !== "object") return
     if (!template) template = obj
+    if (typeof obj.model === "string" && obj.model) resolvedModel = obj.model
     if (obj.usage && typeof obj.usage === "object") usage = obj.usage
   }
 
@@ -428,6 +431,7 @@ export function createEndHintTransform({
           try {
             const obj = JSON.parse(raw.toString("utf8"))
             usage = obj?.usage
+            if (typeof obj?.model === "string" && obj.model) resolvedModel = obj.model
             const message = obj?.choices?.[0]?.message
             const suffix = suffixOf(usage)
             if (suffix && message && typeof message.content === "string") {

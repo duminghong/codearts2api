@@ -76,6 +76,32 @@ test("非流式：提示追加在正文**末尾**，原文与 usage 不变", asy
   assert.ok(content.includes("本次 token 用量：100（输入 60 / 输出 40）"))
 })
 
+test("非流式：显示响应里实际命中的模型，而非请求的 aggregate", async () => {
+  const body = {
+    id: "c1",
+    model: "trae/glm-5.1",
+    choices: [{ index: 0, message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
+    usage: { total_tokens: 100, prompt_tokens: 60, completion_tokens: 40 },
+  }
+  // 请求侧传的是 aggregate/auto，响应实际命中 trae/glm-5.1。
+  const stream = createEndHintTransform({ model: "aggregate/auto", balanceText: BALANCE, isStream: false })
+  const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
+  const content: string = JSON.parse(out).choices[0].message.content
+  assert.ok(content.includes(`当前模型：trae/glm-5.1`), "应显示响应里的实际模型")
+  assert.ok(!content.includes("当前模型：aggregate/auto"), "不应显示请求的聚合模型")
+})
+
+test("非流式：响应没带 model 时回退到请求模型", async () => {
+  const body = {
+    id: "c1",
+    choices: [{ index: 0, message: { role: "assistant", content: "你好" } }],
+    usage: { total_tokens: 100, prompt_tokens: 60, completion_tokens: 40 },
+  }
+  const stream = createEndHintTransform({ model: "trae/glm-5.1", balanceText: BALANCE, isStream: false })
+  const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
+  assert.ok(JSON.parse(out).choices[0].message.content.includes("当前模型：trae/glm-5.1"))
+})
+
 test("非流式：抓不到 usage → 正文原样不动", async () => {
   const body = { id: "c1", choices: [{ index: 0, message: { role: "assistant", content: "你好" } }] }
   const stream = createEndHintTransform({ model: MODEL, balanceText: BALANCE, isStream: false })
@@ -90,7 +116,8 @@ test("流式：提示帧插在 [DONE] 之前，携带 usage 数据", async () =>
     'data: {"id":"c1","object":"chat.completion.chunk","model":"trae/glm-5.1","choices":[],"usage":{"total_tokens":100,"prompt_tokens":60,"completion_tokens":40}}\n\n',
     "data: [DONE]\n\n",
   ]
-  const stream = createEndHintTransform({ model: MODEL, balanceText: BALANCE, isStream: true })
+  // 请求传 aggregate/auto，但响应帧 model 是 trae/glm-5.1 → 结尾应显示后者。
+  const stream = createEndHintTransform({ model: "aggregate/auto", balanceText: BALANCE, isStream: true })
   const out = await runTransform(
     stream,
     frames.map((f) => Buffer.from(f)),
@@ -103,6 +130,8 @@ test("流式：提示帧插在 [DONE] 之前，携带 usage 数据", async () =>
   assert.equal(dataLines.at(-1), "[DONE]")
   const hintFrame = JSON.parse(dataLines.at(-2)!)
   assert.ok(hintFrame.choices[0].delta.content.includes("本次 token 用量：100"))
+  assert.ok(hintFrame.choices[0].delta.content.includes("当前模型：trae/glm-5.1"), "流式也要显示命中的模型")
+  assert.ok(!hintFrame.choices[0].delta.content.includes("当前模型：aggregate/auto"))
   assert.equal(hintFrame.id, "c1")
 })
 
