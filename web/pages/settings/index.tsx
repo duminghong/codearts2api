@@ -157,8 +157,9 @@ export default function Settings({ active = true }: { active?: boolean }) {
               <div className={styles.rowMain}>
                 <div className={styles.rowTitle}>模型名显示渠道前缀</div>
                 <div className={styles.rowDesc}>
-                  通过本反代的 <code>/v1/models</code> 返回的模型展示名前面加上渠道前缀（如 <code>[TRAE] GLM-5.1</code>
-                  ），方便在模型选择器里区分同名模型的渠道。关掉则原样返回上游的模型名。
+                  在通过本反代的 /v1/models 返回的模型展示名前面加上<strong>渠道前缀</strong>
+                  ，方便在模型选择器里区分同名模型的渠道。关掉则原样返回上游的模型名。
+                  <code>[TRAE] GLM-5.1</code>
                 </div>
                 <div className={styles.rowMeta}>{state ? <>以面板开关为准，未点过时默认开启</> : null}</div>
               </div>
