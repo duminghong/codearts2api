@@ -11,7 +11,10 @@
  * ## 注入判定
  *
  * 网关只见一次次独立请求，没有会话概念。只要 messages 里有 user 消息就注入
- * （含续会话）；仅当 system 已含本标记时跳过，防异常客户端把提示回填进 system 反复叠加。
+ * （含续会话）；但任意历史消息（system / assistant / user）已带本标记时跳过 ——
+ * agent 一次用户请求内会发多轮 HTTP（每轮工具调用后一轮），客户端把上一轮的助手
+ * 回复连同提示回填进 assistant 历史；若只查 system，每轮都会重新注入，一个会话
+ * 很快刷屏。标记即「本会话已有提示」的信号，保证一个会话只注入一次。
  *
  * ## 失败语义 fail-open
  *
@@ -30,8 +33,9 @@ export function buildSessionHintText(model: string, balanceText: string | null) 
 }
 
 /**
- * 判定本轮是否该注入：有 user 消息就注入（含续会话），但 system 里已带标记则跳过
- * （防异常客户端把提示回填进 system 反复叠加）。请求体形态不认识 → false（不注入）。
+ * 判定本轮是否该注入：有 user 消息就注入（含续会话），但任意消息已带标记则跳过
+ * （agent 一次请求内的多轮 HTTP 会把带提示的助手回复回填进 assistant 历史，
+ *  只查 system 会导致每轮重新注入、一个会话刷屏）。请求体形态不认识 → false（不注入）。
  */
 export function shouldInjectHint(body: any) {
   const messages = Array.isArray(body?.messages) ? body.messages : null
@@ -39,7 +43,12 @@ export function shouldInjectHint(body: any) {
   let hasUser = false
   for (const m of messages) {
     if (!m || typeof m !== "object") continue
-    if (m.role === "system" && typeof m.content === "string" && m.content.includes(SESSION_HINT_MARKER)) return false
+    // ponytail: 任意角色的历史消息含标记就视为「本会话已提示过」；content 也可能是多模态数组。
+    const content = m.content
+    const text = typeof content === "string" ? content : Array.isArray(content)
+      ? content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("")
+      : ""
+    if (text.includes(SESSION_HINT_MARKER)) return false
     if (m.role === "user") hasUser = true
   }
   return hasUser
@@ -67,7 +76,7 @@ export function shouldInjectHint(body: any) {
 export function summarizeProviderBalance(balanceEntry: any) {
   if (!balanceEntry || balanceEntry.error) return null
   const accounts = Array.isArray(balanceEntry.accounts) ? balanceEntry.accounts : []
-  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
   const unitOf = (u: unknown) => (u === "token" ? "token" : "credit")
   const byUnit = new Map<string, { unit: string; remaining: number }>()
   for (const acc of accounts) {

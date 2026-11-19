@@ -61,6 +61,32 @@ test("幂等：已带提示标记的请求不再注入", () => {
   assert.equal(shouldInjectHint(body), false)
 })
 
+test("幂等：assistant 历史里带标记就不再注入（agent 多轮不刷屏）", () => {
+  // agent 一次用户请求会发多轮 HTTP，客户端把上一轮带提示的助手回复回填进 assistant 历史。
+  assert.equal(
+    shouldInjectHint({
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: `some answer\n\n${HINT}` },
+        { role: "user", content: "再问一下" },
+      ],
+    }),
+    false,
+    "assistant 历史带标记 → 本会话已提示过",
+  )
+  // content 为多模态数组时也要能识别（取其中的 text 段）。
+  assert.equal(
+    shouldInjectHint({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: HINT }] },
+        { role: "user", content: "again" },
+      ],
+    }),
+    false,
+    "多模态 content 里的标记同样生效",
+  )
+})
+
 test("提示文本：含模型与积分，查不到积分时不编造数字", () => {
   const full = buildSessionHintText("trae/glm-5.1", "1200 credit")
   assert.ok(full.startsWith(MARK))
