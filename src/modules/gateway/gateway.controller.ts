@@ -110,7 +110,7 @@ export function createGatewayController({
     // ⚠️ 开关关着时**整段跳过**：否则会为了「读完再原样转发」而无谓地 buffer
     //    整个请求体（SSE 长对话尤其明显）。开关是每请求现读的，所以点了立刻生效。
     let hintText: string | null = null
-    let endHintCtx: { model: string; balanceText: string | null } | null = null
+    let endHintCtx: { model: string } | null = null
     if (sessionHint && (hintOn() || endHintOn()) && url.pathname === "/v1/chat/completions" && hasBody) {
       let body = gateBody
       if (!body) {
@@ -250,7 +250,6 @@ export function createGatewayController({
       finalStream = finalStream.pipe(
         createEndHintTransform({
           model: endHintCtx.model,
-          balanceText: endHintCtx.balanceText,
           isStream,
           logger,
         }),

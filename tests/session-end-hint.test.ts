@@ -1,9 +1,9 @@
 /**
  * 会话结尾提示（在助手回复正文**末尾**追加用户可见文字）的回归测试。
  *
- * 结尾提示显示「当前模型 + 渠道剩余积分 + 本次 token 用量」：token 用量取自
- * 上游 usage，抓不到就不显示（绝不编造）。与开头提示一样失败全是静默的，
- * 故这里把纯函数 + 响应流注入都覆盖。
+ * 结尾提示显示「实际命中的模型 + 本次 token 用量」：token 用量取自
+ * 上游 usage，抓不到就不显示（绝不编造）。不报积分（与开头提示重复）。
+ * 与开头提示一样失败全是静默的，故这里把纯函数 + 响应流注入都覆盖。
  */
 
 import assert from "node:assert/strict"
@@ -17,7 +17,6 @@ import {
 
 const MARK = "[网关提示]"
 const MODEL = "trae/glm-5.1"
-const BALANCE = "1200 credit"
 
 /** 把若干 Buffer 喂进 Transform，收齐输出。 */
 async function runTransform(stream: any, chunks: Buffer[]): Promise<string> {
@@ -48,16 +47,13 @@ test("summarizeTokenUsage：OpenAI 口径 total + 输入/输出明细", () => {
   assert.equal(summarizeTokenUsage({ total_tokens: "oops" }), null)
 })
 
-test("buildSessionEndHintText：模型 + 积分 + token，缺项不编造", () => {
+test("buildSessionEndHintText：模型 + token，缺 token 返回空串（不编造、不显示空提示）", () => {
   assert.equal(
-    buildSessionEndHintText(MODEL, BALANCE, "100（输入 60 / 输出 40）"),
-    `${MARK} 当前模型：${MODEL} · 渠道剩余积分：${BALANCE} · 本次 token 用量：100（输入 60 / 输出 40）。`,
+    buildSessionEndHintText(MODEL, "100（输入 60 / 输出 40）"),
+    `${MARK} 当前模型：${MODEL} · 本次 token 用量：100（输入 60 / 输出 40）。`,
   )
-  // 无 token 用量 → 不出现「token」字样
-  const withoutToken = buildSessionEndHintText(MODEL, BALANCE, null)
-  assert.ok(withoutToken.includes(`当前模型：${MODEL}`))
-  assert.ok(withoutToken.includes(`渠道剩余积分：${BALANCE}`))
-  assert.ok(!withoutToken.includes("token"))
+  assert.ok(!buildSessionEndHintText(MODEL, "100").includes("积分"), "结尾不报积分（与开头重复）")
+  assert.equal(buildSessionEndHintText(MODEL, null), "")
 })
 
 test("非流式：提示追加在正文**末尾**，原文与 usage 不变", async () => {
@@ -66,7 +62,7 @@ test("非流式：提示追加在正文**末尾**，原文与 usage 不变", asy
     choices: [{ index: 0, message: { role: "assistant", content: "你好" }, finish_reason: "stop" }],
     usage: { total_tokens: 100, prompt_tokens: 60, completion_tokens: 40 },
   }
-  const stream = createEndHintTransform({ model: MODEL, balanceText: BALANCE, isStream: false })
+  const stream = createEndHintTransform({ model: MODEL, isStream: false })
   const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
   const obj = JSON.parse(out)
   assert.equal(obj.usage.total_tokens, 100)
@@ -84,7 +80,7 @@ test("非流式：显示响应里实际命中的模型，而非请求的 aggrega
     usage: { total_tokens: 100, prompt_tokens: 60, completion_tokens: 40 },
   }
   // 请求侧传的是 aggregate/auto，响应实际命中 trae/glm-5.1。
-  const stream = createEndHintTransform({ model: "aggregate/auto", balanceText: BALANCE, isStream: false })
+  const stream = createEndHintTransform({ model: "aggregate/auto", isStream: false })
   const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
   const content: string = JSON.parse(out).choices[0].message.content
   assert.ok(content.includes(`当前模型：trae/glm-5.1`), "应显示响应里的实际模型")
@@ -97,14 +93,14 @@ test("非流式：响应没带 model 时回退到请求模型", async () => {
     choices: [{ index: 0, message: { role: "assistant", content: "你好" } }],
     usage: { total_tokens: 100, prompt_tokens: 60, completion_tokens: 40 },
   }
-  const stream = createEndHintTransform({ model: "trae/glm-5.1", balanceText: BALANCE, isStream: false })
+  const stream = createEndHintTransform({ model: "trae/glm-5.1", isStream: false })
   const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
   assert.ok(JSON.parse(out).choices[0].message.content.includes("当前模型：trae/glm-5.1"))
 })
 
 test("非流式：抓不到 usage → 正文原样不动", async () => {
   const body = { id: "c1", choices: [{ index: 0, message: { role: "assistant", content: "你好" } }] }
-  const stream = createEndHintTransform({ model: MODEL, balanceText: BALANCE, isStream: false })
+  const stream = createEndHintTransform({ model: MODEL, isStream: false })
   const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
   assert.equal(JSON.parse(out).choices[0].message.content, "你好")
 })
@@ -117,7 +113,7 @@ test("流式：提示帧插在 [DONE] 之前，携带 usage 数据", async () =>
     "data: [DONE]\n\n",
   ]
   // 请求传 aggregate/auto，但响应帧 model 是 trae/glm-5.1 → 结尾应显示后者。
-  const stream = createEndHintTransform({ model: "aggregate/auto", balanceText: BALANCE, isStream: true })
+  const stream = createEndHintTransform({ model: "aggregate/auto", isStream: true })
   const out = await runTransform(
     stream,
     frames.map((f) => Buffer.from(f)),
@@ -141,7 +137,7 @@ test("流式：跨 chunk 的半帧也能正确注入", async () => {
     'data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[],"usage":{"total_tokens":9}}\n\n' +
     "data: [DONE]\n\n"
   const cut = Math.floor(full.length / 2)
-  const stream = createEndHintTransform({ model: MODEL, balanceText: BALANCE, isStream: true })
+  const stream = createEndHintTransform({ model: MODEL, isStream: true })
   const out = await runTransform(stream, [Buffer.from(full.slice(0, cut)), Buffer.from(full.slice(cut))])
   assert.ok(out.includes("本次 token 用量：9"))
   assert.ok(out.trimEnd().endsWith("data: [DONE]"))

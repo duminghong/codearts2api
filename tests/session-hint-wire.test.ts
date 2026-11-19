@@ -198,7 +198,7 @@ test("开启后：首轮请求发给上游时原样（不塞 system），提示�
     // 响应侧：用户看到的回复正文开头有提示。
     const obj = JSON.parse(text)
     assert.ok(obj.choices[0].message.content.startsWith(HINT_MARK), "回复正文开头应有提示")
-    assert.ok(obj.choices[0].message.content.includes("trae/glm-5.1"), "提示要有模型名")
+    assert.ok(!obj.choices[0].message.content.includes("trae/glm-5.1"), "开头提示不报模型（结尾才报命中模型）")
     assert.ok(obj.choices[0].message.content.includes("7 credit"), "提示要有积分")
     assert.ok(obj.choices[0].message.content.endsWith("你好，我是助手"), "原文必须保留")
     assert.deepEqual(obj.usage, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }, "usage 不能被改")
@@ -285,7 +285,7 @@ test("关闭时：请求体、回复体都一个字节不动", async () => {
   }
 })
 
-test("积分查询失败（RPC 抛错）：仍注入只有模型名的提示（fail-open）", async () => {
+test("积分查询失败（RPC 抛错）：不注入开头提示（fail-open，原文不动）", async () => {
   const upstream = await startFakeUpstream("json")
   process.env.DSH_OPENAI_GATEWAY_PORT = String(upstream.port)
   const app = await startProxy({
@@ -297,9 +297,8 @@ test("积分查询失败（RPC 抛错）：仍注入只有模型名的提示（f
   try {
     const res = await chat(app.origin, firstTurn)
     const content = JSON.parse(await res.text()).choices[0].message.content
-    assert.ok(content.startsWith(HINT_MARK))
-    assert.ok(content.includes("trae/glm-5.1"))
-    assert.ok(!content.includes("积分"), "查不到积分时不该编造")
+    assert.ok(!content.includes(HINT_MARK), "查不到积分时不注入空提示")
+    assert.ok(content.endsWith("你好，我是助手"), "原文必须保留")
   } finally {
     await app.close()
     await upstream.close()

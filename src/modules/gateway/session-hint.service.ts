@@ -26,10 +26,10 @@ import { Transform } from "node:stream"
 /** 注入文本的识别标记：既用于幂等，也方便用户/客户端按需过滤。 */
 export const SESSION_HINT_MARKER = "[网关提示]"
 
-/** 用户可见的提示文本（纯函数，测试友好）。 */
-export function buildSessionHintText(model: string, balanceText: string | null) {
-  const balance = balanceText ? ` · 渠道剩余积分：${balanceText}` : ""
-  return `${SESSION_HINT_MARKER} 当前模型：${model}${balance}。`
+/** 开头提示文本：只报渠道剩余积分（发请求前的预算感知）；查不到积分则空串。 */
+export function buildSessionHintText(balanceText: string | null) {
+  if (!balanceText) return ""
+  return `${SESSION_HINT_MARKER} 渠道剩余积分：${balanceText}。`
 }
 
 /**
@@ -45,9 +45,12 @@ export function shouldInjectHint(body: any) {
     if (!m || typeof m !== "object") continue
     // ponytail: 任意角色的历史消息含标记就视为「本会话已提示过」；content 也可能是多模态数组。
     const content = m.content
-    const text = typeof content === "string" ? content : Array.isArray(content)
-      ? content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("")
-      : ""
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("")
+          : ""
     if (text.includes(SESSION_HINT_MARKER)) return false
     if (m.role === "user") hasUser = true
   }
@@ -264,14 +267,13 @@ export function createResponseHintTransform({
 }
 
 /**
- * 结尾提示文本：当前模型 + 渠道剩余积分 + 本次 token 用量。
- * 与开头提示共用 `[网关提示]` 标记（幂等/可过滤）；`tokenText` 抓不到时为 null（不编造）。
+ * 结尾提示文本：实际命中的模型 + 本次 token 用量（账单感信息）。
+ * 不报积分（与开头提示重复）；与开头共用 `[网关提示]` 标记（幂等/可过滤）；
+ * `tokenText` 抓不到时为 null（不编造）。
  */
-export function buildSessionEndHintText(model: string, balanceText: string | null, tokenText: string | null) {
-  const parts = [`当前模型：${model}`]
-  if (balanceText) parts.push(`渠道剩余积分：${balanceText}`)
-  if (tokenText) parts.push(`本次 token 用量：${tokenText}`)
-  return `${SESSION_HINT_MARKER} ${parts.join(" · ")}。`
+export function buildSessionEndHintText(model: string, tokenText: string | null) {
+  if (!tokenText) return ""
+  return `${SESSION_HINT_MARKER} 当前模型：${model} · 本次 token 用量：${tokenText}。`
 }
 
 /** 从 OpenAI 口径 usage 里取「本次 token 用量」文本；抓不到返回 null（fail-open）。 */
@@ -304,12 +306,10 @@ export function summarizeTokenUsage(usage: any): string | null {
  */
 export function createEndHintTransform({
   model,
-  balanceText,
   isStream,
   logger,
 }: {
   model: string
-  balanceText: string | null
   isStream: boolean
   logger?: any
 }): Transform {
@@ -319,7 +319,7 @@ export function createEndHintTransform({
   const suffixOf = (usage: any) => {
     const tokenText = summarizeTokenUsage(usage)
     if (!tokenText) return null
-    return `\n\n${buildSessionEndHintText(resolvedModel, balanceText, tokenText)}`
+    return `\n\n${buildSessionEndHintText(resolvedModel, tokenText)}`
   }
 
   // 非流式：整段 buffer
@@ -524,8 +524,8 @@ export function createSessionHint({
 
   const flag = (v: boolean | (() => boolean)) => (typeof v === "function" ? v() === true : v === true)
 
-  /** 请求侧公共解析：模型 + 渠道余额；不满足注入条件返回 null。 */
-  async function resolve(raw: Buffer, model: string | null) {
+  /** 请求侧公共解析：判定注入条件 + 模型；withBalance 时才查渠道余额（开头提示要，结尾不要）。 */
+  async function resolve(raw: Buffer, model: string | null, withBalance: boolean) {
     let body: any
     try {
       body = JSON.parse(raw.toString("utf8"))
@@ -536,10 +536,10 @@ export function createSessionHint({
     if (!shouldInjectHint(body)) return null
     const effectiveModel = model || (typeof body?.model === "string" ? body.model : null)
     if (!effectiveModel) return null
+    if (!withBalance) return { model: effectiveModel }
     const slash = effectiveModel.indexOf("/")
     const provider = slash > 0 ? effectiveModel.slice(0, slash) : null
-    const balanceText = await balanceTextOf(provider)
-    return { model: effectiveModel, balanceText }
+    return { model: effectiveModel, balanceText: await balanceTextOf(provider) }
   }
 
   /**
@@ -548,17 +548,18 @@ export function createSessionHint({
    */
   async function prepare(raw: Buffer, model: string | null): Promise<string | null> {
     if (!flag(enabled)) return null
-    const ctx = await resolve(raw, model)
-    return ctx ? buildSessionHintText(ctx.model, ctx.balanceText) : null
+    const ctx = await resolve(raw, model, true)
+    // 查不到积分时不注入（不再有「只有模型名」的降级提示可显示）。
+    return ctx?.balanceText ? buildSessionHintText(ctx.balanceText) : null
   }
 
   /**
-   * 结尾提示的请求侧准备：返回 { model, balanceText } 供响应 Transform 使用。
-   * token 用量要等响应里才有，故这里不含。
+   * 结尾提示的请求侧准备：只判定 + 取回退模型，不查积分（省一次 RPC）。
+   * token 用量与实际命中模型都要等响应里才有。
    */
   async function prepareEnd(raw: Buffer, model: string | null) {
     if (!flag(endEnabled ?? enabled)) return null
-    return resolve(raw, model)
+    return resolve(raw, model, false)
   }
 
   return { prepare, prepareEnd }

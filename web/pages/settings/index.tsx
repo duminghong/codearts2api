@@ -87,8 +87,9 @@ export default function Settings({ active = true }: { active?: boolean }) {
                 <div className={styles.rowTitle}>会话开头提示</div>
                 <div className={styles.rowDesc}>
                   在每次会话的<strong>首轮</strong>
-                  助手回复正文开头，显示一条提示，说明当前模型与该渠道的剩余积分（给用户看，不发给模型）。
+                  助手回复正文开头，显示一条提示，报告渠道剩余积分，方便你判断还能不能用（给用户看，不发给模型）。
                   首轮判定用的是「没有 assistant 消息」这个保守启发式；提示只出现一次，不会重复打扰。
+                  <code>[网关提示] 渠道剩余积分：16608。</code>
                 </div>
                 <div className={styles.rowMeta}>
                   {state ? (
@@ -121,8 +122,10 @@ export default function Settings({ active = true }: { active?: boolean }) {
                 <div className={styles.rowTitle}>会话结尾提示</div>
                 <div className={styles.rowDesc}>
                   在每次助手回复正文<strong>末尾</strong>
-                  追加一条提示，显示当前模型、该渠道的剩余积分，以及本次请求的 token 用量（给用户看，不发给模型）。
-                  token 用量取自上游返回的 usage；取不到时只显示模型与积分。
+                  追加一条提示，显示本次实际命中的模型与 token
+                  用量，方便你核对用了啥、花了多少（给用户看，不发给模型）。 token 用量取自上游返回的
+                  usage；取不到时不显示这条提示。
+                  <code>[网关提示] 当前模型：trae/glm-5.1 · 本次 token 用量：100（输入 60 / 输出 40）。</code>
                 </div>
                 <div className={styles.rowMeta}>
                   {state ? (

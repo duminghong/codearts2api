@@ -20,7 +20,7 @@ import {
 } from "../src/modules/gateway/session-hint.service.ts"
 
 const MARK = "[网关提示]"
-const HINT = `${MARK} 当前模型：trae/glm-5.1 · 渠道剩余积分：1200 credit。`
+const HINT = `${MARK} 渠道剩余积分：1200 credit。`
 
 test("注入判定：每轮只要有 user 消息就注入（含续会话）", () => {
   assert.equal(shouldInjectHint({ messages: [{ role: "user", content: "hi" }] }), true)
@@ -87,14 +87,12 @@ test("幂等：assistant 历史里带标记就不再注入（agent 多轮不刷�
   )
 })
 
-test("提示文本：含模型与积分，查不到积分时不编造数字", () => {
-  const full = buildSessionHintText("trae/glm-5.1", "1200 credit")
+test("提示文本：只报积分，查不到积分时返回空串（不编造、不显示空提示）", () => {
+  const full = buildSessionHintText("1200 credit")
   assert.ok(full.startsWith(MARK))
-  assert.ok(full.includes("trae/glm-5.1"))
   assert.ok(full.includes("1200 credit"))
-  const noBalance = buildSessionHintText("trae/glm-5.1", null)
-  assert.ok(noBalance.includes("trae/glm-5.1"))
-  assert.ok(!noBalance.includes("积分"), "查不到积分时不该出现积分字样")
+  assert.ok(!full.includes("模型"), "开头提示不报模型（模型留给结尾报实际命中的）")
+  assert.equal(buildSessionHintText(null), "")
 })
 
 test("非流式注入：提示加到 message.content 最前面，其余字段原样", () => {
@@ -221,11 +219,11 @@ test("prepare：首轮返回提示文本，且不改写请求体（只返回文�
   const text = await hint.prepare(raw, "trae/x")
   assert.ok(text)
   assert.ok(text.startsWith(MARK))
-  assert.ok(text.includes("trae/x"))
   assert.ok(text.includes("7 credit"))
+  assert.ok(!text.includes("trae/x"), "开头提示不报模型")
 })
 
-test("prepare：fail-open —— RPC 失败仍返回只有模型名的提示", async () => {
+test("prepare：RPC 失败查不到积分 → 不注入开头提示（不显示空提示）", async () => {
   const hint = createSessionHint({
     enabled: true,
     rpc: async () => {
@@ -233,10 +231,7 @@ test("prepare：fail-open —— RPC 失败仍返回只有模型名的提示", a
     },
   })
   const raw = Buffer.from(JSON.stringify({ model: "trae/x", messages: [{ role: "user", content: "hi" }] }))
-  const text = await hint.prepare(raw, "trae/x")
-  assert.ok(text)
-  assert.ok(text.includes("trae/x"))
-  assert.ok(!text.includes("积分"))
+  assert.equal(await hint.prepare(raw, "trae/x"), null)
 })
 
 test("prepare：关闭/无 user/坏 JSON/无模型时返回 null", async () => {
@@ -262,7 +257,8 @@ test("prepare：关闭/无 user/坏 JSON/无模型时返回 null", async () => {
   )
   assert.equal(await off.prepare(first, "trae/x"), null, "关闭时不提示")
   assert.equal(await on.prepare(noUser, "trae/x"), null, "没有 user 不提示")
-  assert.ok(await on.prepare(multi, "trae/x"), "续会话有 user 要提示")
+  // 此 rpc 返回空 accounts（查不到积分）→ 开头提示不注入。
+  assert.equal(await on.prepare(multi, "trae/x"), null, "续会话虽有 user，但查不到积分不提示")
   assert.equal(await on.prepare(Buffer.from("not-json"), "trae/x"), null, "坏 JSON 不提示")
   assert.equal(
     await on.prepare(Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] })), null),
@@ -300,8 +296,8 @@ test("prepare：aggregate/auto 汇总所有渠道积分（跳过自身）", asyn
   const raw = Buffer.from(JSON.stringify({ model: "aggregate/auto", messages: [{ role: "user", content: "hi" }] }))
   const text = await hint.prepare(raw, "aggregate/auto")
   assert.ok(text)
-  assert.ok(text.includes("aggregate/auto"))
   assert.ok(text.includes("15 credit"), `应汇总三个渠道共 15，实际：${text}`)
+  assert.ok(!text.includes("aggregate/auto"), "开头提示不报模型")
   assert.ok(!seen.includes("aggregate"), "不该拿 aggregate 自己去查余额")
 })
 
