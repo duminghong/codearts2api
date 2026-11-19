@@ -3,15 +3,7 @@ import { join } from "node:path"
 import { Transform } from "node:stream"
 
 /** 用量记录：把一次调用的结果异步写入 caller-usage/<UTC+8 日期>.jsonl，并在响应流上边转发边采集 usage。 */
-export function createUsageRecorder({
-  logDir,
-  logger,
-  isEnabled,
-}: {
-  logDir: string
-  logger?: any
-  isEnabled: () => boolean
-}) {
+export function createUsageRecorder({ logDir, logger }: { logDir: string; logger?: any }) {
   // 异步写 + 串行队列：不阻塞事件循环，同时保证同一进程内写入有序、不交叉。
   // 返回 Promise，便于测试/调用方在需要时 await（服务热路径不 await）。
   let logChain = Promise.resolve()
@@ -20,14 +12,10 @@ export function createUsageRecorder({
     logChain = logChain.then(async () => {
       try {
         await mkdir(logDir, { recursive: true })
-        // 目录按人眼里的「今天」分文件；用 UTC 会让 UTC+8 的 00:00-08:00 记到前一天。
-        const now = new Date()
-        const day =
-          String(now.getFullYear()) +
-          "-" +
-          String(now.getMonth() + 1).padStart(2, "0") +
-          "-" +
-          String(now.getDate()).padStart(2, "0")
+        // 目录按人眼里的「今天」（UTC+8）分文件，与看板读取端 utc8Date() 同一口径。
+        // 用本地时区会在 Docker（默认 UTC）里把 UTC+8 的 00:00-08:00 记到前一天，
+        // 导致「今日用量」为空、趋势整体错位一天。
+        const day = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
         await appendFile(join(logDir, `${day}.jsonl`), line, "utf8")
       } catch (error) {
         logger?.warn?.(`[caller-gate] 写用量日志失败：${String(error)}`)
@@ -46,10 +34,8 @@ export function createUsageRecorder({
    * - 非流式：整段 JSON 里窗口匹配 `"usage"`（纯数值对象，安全），状态沿用 HTTP 状态。
    */
   function tapStream(source, ctx) {
-    // 闸门没开（没有 store）就直接把原流交回去，一个字节都不多碰。
-    // ⚠️ 这里读的是 `inspect()` 刚刚刷新的缓存，不再发一次 I/O：
-    //    tapStream 是同步的（要求它返回可 pipe 的流），而读盘已经全部异步化。
-    if (!isEnabled()) return source
+    // 用量记录与「闸门是否加载 caller-keys.json」无关：直接用网关 Key（常态部署）
+    // 时也必须记，否则总览的今日用量/近14日趋势永远为空。
     const startedAt = Number.isFinite(ctx.startedAt) ? ctx.startedAt : Date.now()
     const isStream = Boolean(ctx.stream)
     let status = ctx.status ?? 200

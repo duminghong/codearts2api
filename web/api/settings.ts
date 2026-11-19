@@ -4,6 +4,8 @@ const API = "/admin/settings/api"
 export interface SettingsState {
   /** 会话开头提示：首轮聊天请求注入「模型 + 渠道积分」。 */
   sessionHint: boolean
+  /** /v1/models 展示名加渠道前缀（默认开）。 */
+  modelNameDecor: boolean
   /** 当前值来自面板（用户点过）还是环境变量的初始默认值。 */
   source: "env" | "panel"
   /** 环境变量提供的初始默认值（仅供界面提示）。 */
@@ -29,3 +31,7 @@ export const getSettings = () => request<SettingsState>("/")
 /** 开关「会话开头提示」。返回生效后的值。 */
 export const setSessionHint = (enabled: boolean) =>
   request<{ sessionHint: boolean }>("/session-hint", { method: "PUT", body: JSON.stringify({ enabled }) })
+
+/** 开关「/v1/models 渠道前缀装饰」。返回生效后的值。 */
+export const setModelNameDecor = (enabled: boolean) =>
+  request<{ modelNameDecor: boolean }>("/model-name-decor", { method: "PUT", body: JSON.stringify({ enabled }) })

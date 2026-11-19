@@ -16,9 +16,10 @@ on:
 permissions:
   contents: write
 
-# 同一时间只跑一个（手动触发时若定时任务正在跑，排队而不是并发）
+# 同一时间只跑一个（手动触发时若定时任务正在跑，排队而不是并发）。
+# ⚠️ group 与 sync-fork.yml **共用**：两者都会写 main，必须排队不能并发。
 concurrency:
-  group: upgrade-upstream
+  group: main-branch-write
   cancel-in-progress: false
 
 jobs:

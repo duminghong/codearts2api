@@ -128,6 +128,7 @@ export async function createHttpServer(host, options: any = {}) {
     adminRpc,
     // 每次请求现读，点了开关立刻生效（不必重启）。
     sessionHintEnabled: () => settingsService.sessionHintEnabled(),
+    modelNameDecorEnabled: () => settingsService.modelNameDecorEnabled(),
   })
   const authRouter = createAuthRouter({ adminKeyEnabled, adminKey, throttle, logger })
   const adminGuard = createAdminGuard({ adminKeyEnabled, adminKey, throttle })

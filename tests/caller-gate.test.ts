@@ -99,9 +99,43 @@ test("没有 caller-keys.json 时闸门整层不生效（默认关闭）", async
   // /v1/models 也不该被过滤（否则等于闸门关闭状态下仍在改行为）。
   const payload = { object: "list", data: [{ id: "codearts/gpt-4" }, { id: "aggregate/auto" }] }
   assert.deepEqual(gate.filterModels(payload, null), payload)
-  // tapStream 必须原样返回 source，一个字节都不碰。
-  const source = Readable.from([Buffer.from("data: {}\n\n")])
-  assert.equal(gate.tapStream(source, {}), source)
+  // 闸门没开时 inspect 判定完全透明；但用量记录仍要旁挂（否则总览无数据）。
+  // tapStream 现在返回一个采集用的 Transform —— 关键是响应字节原样、不吞不改写。
+  const body = "data: {}\n\n"
+  const tapped = gate.tapStream(Readable.from([Buffer.from(body)]), {})
+  const chunks = []
+  for await (const chunk of tapped) chunks.push(chunk)
+  assert.equal(Buffer.concat(chunks).toString("utf8"), body)
+})
+
+test("闸门关闭（无 caller-keys.json）时仍记录用量，总览才有数据", async () => {
+  const gate = createCallerGate({ home: makeHome({ store: false }) })
+
+  // 没有 store：inspect 完全透明，但用量必须照记 —— 直接用网关 Key 是常态部署形态。
+  const source = Readable.from([
+    Buffer.from('{"id":"x","usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}'),
+  ])
+  const tapped = gate.tapStream(source, {
+    status: 200,
+    model: "codearts/gpt-4",
+    path: "/v1/chat/completions",
+    stream: false,
+  })
+  const chunks = []
+  for await (const chunk of tapped) chunks.push(chunk)
+  assert.ok(Buffer.concat(chunks).length > 0, "响应字节不能被吞掉")
+
+  let line = null
+  const deadline = Date.now() + 2000
+  while (!line && Date.now() < deadline) {
+    const files = existsSync(gate.logDir) ? readdirSync(gate.logDir) : []
+    const text = files.length ? readFileSync(join(gate.logDir, files[0]), "utf8").trim() : ""
+    if (text) line = JSON.parse(text.split("\n").pop())
+    else await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.ok(line, "闸门关闭时也必须落一条用量日志")
+  assert.equal(line.in_tokens, 3)
+  assert.equal(line.out_tokens, 4)
 })
 
 test("未知 key 返回 401 invalid_api_key", async () => {

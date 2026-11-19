@@ -37,6 +37,7 @@ test("默认：开关关闭，来源是 env（未动过面板）", async (t) => 
 
   const state = await readSettings(app)
   assert.equal(state.sessionHint, false)
+  assert.equal(state.modelNameDecor, true, "装饰默认开，保持历史行为")
   assert.equal(state.source, "env")
   assert.equal(state.envDefault, false)
 })
@@ -100,17 +101,54 @@ test("实时生效：改了开关不用重启，/healthz 立刻反映", async (t
   assert.equal(after.sessionHint, true, "改完应立刻生效，无需重启")
 })
 
+test("渠道前缀装饰开关：落盘、重启后仍在，且改一个键不擦掉另一个", async (t) => {
+  const app = await startTestApp()
+  t.onTestFinished(() => app.close())
+
+  // 先关 sessionHint，再关装饰 —— 两个键要共存。
+  await fetch(`${app.origin}/admin/settings/api/session-hint`, {
+    method: "PUT",
+    headers: authed(app, { "content-type": "application/json" }),
+    body: JSON.stringify({ enabled: true }),
+  })
+  const off = await fetch(`${app.origin}/admin/settings/api/model-name-decor`, {
+    method: "PUT",
+    headers: authed(app, { "content-type": "application/json" }),
+    body: JSON.stringify({ enabled: false }),
+  })
+  assert.equal(off.status, 200)
+  assert.equal((await off.json()).modelNameDecor, false)
+
+  const saved = JSON.parse(await readFile(join(app.home, "settings.json"), "utf8"))
+  assert.equal(saved.modelNameDecor, false)
+  assert.equal(saved.sessionHint, true, "改装饰不能擦掉 sessionHint")
+
+  const state = await readSettings(app)
+  assert.equal(state.modelNameDecor, false)
+  assert.equal(state.sessionHint, true)
+  // source 反映 sessionHint 的来源（上面点过它 → panel），与装饰开关无关。
+  assert.equal(state.source, "panel")
+
+  await app.close()
+  const restarted = await startTestApp({ home: app.home })
+  t.onTestFinished(() => restarted.close())
+  const after = await readSettings(restarted)
+  assert.equal(after.modelNameDecor, false, "重启后应保持装饰关")
+})
+
 test("坏输入：enabled 不是布尔 → 400", async (t) => {
   const app = await startTestApp()
   t.onTestFinished(() => app.close())
 
-  for (const body of [{ enabled: "yes" }, { enabled: 1 }, {}]) {
-    const response = await fetch(`${app.origin}/admin/settings/api/session-hint`, {
-      method: "PUT",
-      headers: authed(app, { "content-type": "application/json" }),
-      body: JSON.stringify(body),
-    })
-    assert.equal(response.status, 400, `${JSON.stringify(body)} 应 400`)
+  for (const path of ["session-hint", "model-name-decor"]) {
+    for (const body of [{ enabled: "yes" }, { enabled: 1 }, {}]) {
+      const response = await fetch(`${app.origin}/admin/settings/api/${path}`, {
+        method: "PUT",
+        headers: authed(app, { "content-type": "application/json" }),
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 400, `${path} + ${JSON.stringify(body)} 应 400`)
+    }
   }
 })
 

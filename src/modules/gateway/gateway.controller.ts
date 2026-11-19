@@ -33,16 +33,20 @@ export function createGatewayController({
   upstreamTimeoutMs,
   adminRpc,
   sessionHintEnabled,
+  modelNameDecorEnabled,
 }: any) {
   const resolveGatewayTarget = createGatewayTargetResolver({ host })
   // 会话开头提示：/v1/chat/completions 首轮注入「模型 + 渠道积分」system 消息。
   // 请求体的来源见下面 >>> session-hint 段：闸门开着就用闸门 buffer 的，
   // 闸门关着（默认形态）就自己 buffer —— 两条路都得覆盖。
   //
-  // ⚠️ `sessionHintEnabled` 可以是布尔常量，也可以是 **getter**（`() => boolean`）：
-  //    管理端面板的开关要能实时生效，所以不能在建对象时把开关求值成常量。
-  const hintOn = () =>
-    typeof sessionHintEnabled === "function" ? sessionHintEnabled() === true : sessionHintEnabled === true
+  // ⚠️ `sessionHintEnabled` / `modelNameDecorEnabled` 可以是布尔常量，也可以是
+  //    **getter**（`() => boolean`）：管理端面板的开关要能实时生效，
+  //    所以不能在建对象时把开关求值成常量。
+  const flag = (v: any) => (typeof v === "function" ? v() === true : v === true)
+  const hintOn = () => flag(sessionHintEnabled)
+  // 装饰开关关着时两条装饰路径都整段跳过：不缓冲、不解析，行为与「没有装饰功能」完全一致。
+  const decorOn = () => flag(modelNameDecorEnabled)
   const sessionHint =
     typeof adminRpc === "function" ? createSessionHint({ enabled: hintOn, rpc: adminRpc, logger }) : null
 
@@ -144,7 +148,8 @@ export function createGatewayController({
     if (callerGate && gateEntry && url.pathname === "/v1/models" && upstream.ok) {
       try {
         const payload = await upstream.json()
-        callerGate.sendJson(response, 200, decorateModelsWithProvider(callerGate.filterModels(payload, gateEntry)))
+        const filtered = callerGate.filterModels(payload, gateEntry)
+        callerGate.sendJson(response, 200, decorOn() ? decorateModelsWithProvider(filtered) : filtered)
         return
       } catch {
         /* 解析失败就退回原始流 */
@@ -156,6 +161,7 @@ export function createGatewayController({
     // 装饰必须在流式路径里也做一次。缓冲有上限，且**任何失败都原样回写已读的字节**，
     // 绝不因为装饰功能把上游响应吞掉 —— 装饰失败宁可退回「没有渠道前缀」。
     if (
+      decorOn() &&
       url.pathname === "/v1/models" &&
       upstream.ok &&
       String(upstream.headers.get("content-type") ?? "").includes("json")

@@ -24,5 +24,12 @@ export function createSettingsController({ service }: { service: any }) {
     sendJson(response, 200, { sessionHint: await service.setSessionHint(body.enabled) })
   })
 
+  /** 改「/v1/models 渠道前缀装饰」开关，同样立刻生效。 */
+  router.put("/model-name-decor", async (request, response) => {
+    const body = request.body ?? {}
+    if (typeof body.enabled !== "boolean") throw new AppError(400, "invalid_enabled", "enabled 必须是布尔值")
+    sendJson(response, 200, { modelNameDecor: await service.setModelNameDecor(body.enabled) })
+  })
+
   return { router }
 }

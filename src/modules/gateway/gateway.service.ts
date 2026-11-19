@@ -4,18 +4,15 @@ import { JET_HUB_PATH, rpcEnvelope } from "../../core/upstream.ts"
 const TARGET_TTL_MS = 5_000
 
 /**
- * `/v1/models` 展示名装饰：渠道前缀 + 图片模态标记。
+ * `/v1/models` 展示名装饰：渠道前缀。
  *
  * 背景：网关目录里的展示名只有模型自身（`GLM-5.1 · x0.83`），渠道信息只存在于
- * id 前缀（`trae/glm-5.1`），能否收图只存在于 `input` 数组（`["text","image"]`）。
- * 而 DSH「获取可用模型」把条目的 `name` 直接当显示名，并且**只读
- * id/name/contextWindow/maxTokens 四个字段** —— `input` 会被丢掉，界面拿不到。
- * 于是用户在模型选择器里既分不清渠道，也看不出谁支持贴图。这里在反代出口把
- * `name` 改成 `[TRAE] 🖼️ Seed-Code · x0.12→x0.06`，原始名保留进 `display_name`。
+ * id 前缀（`trae/glm-5.1`）。而 DSH「获取可用模型」把条目的 `name` 直接当显示名，
+ * 于是用户在模型选择器里分不清渠道。这里在反代出口把
+ * `name` 改成 `[TRAE] Seed-Code · x0.12→x0.06`，原始名保留进 `display_name`。
  *
  * ⚠️ 只改 `name` 不改 `id`：id 是请求体里要回填的 wire 值，动了就全断。
  * ⚠️ 只覆盖走本反代（:8080/v1）的客户端；直连插件网关（:8326）的拿不到装饰。
- * ⚠️ 标记用 emoji 而不是自绘图标：DSH 的模型名是纯文本，塞不进 SVG。
  */
 const PROVIDER_NAME_LABELS: Record<string, string> = {
   codearts: "CodeArts",
@@ -59,25 +56,14 @@ function providerNameLabel(prov: string) {
 }
 
 /**
- * 支持图片输入的模型，插在渠道前缀之后的标记。
- *
- * 位置选「前缀后、名字前」而不是末尾：宿主里模型行这类单行标签一律带
- * `text-overflow:ellipsis`，长名字从**右侧**截断 —— 标记放末尾时，恰恰是最长、
- * 最需要一眼看出模态的名字最先丢掉图标。放左侧则永远可见。
- */
-const IMAGE_MODALITY_MARK = "\u{1F5BC}\uFE0F"
-
-/**
  * 就地装饰 `{ data: [...] }` 形态的模型列表：
  *
  * ```
- * Seed-Code · x0.12→x0.06   →   [TRAE] 🖼️ Seed-Code · x0.12→x0.06
- * GLM-5.0 · x0.80           →   [CodeBuddy] GLM-5.0 · x0.80        （纯文本不加图标）
+ * Seed-Code · x0.12→x0.06   →   [TRAE] Seed-Code · x0.12→x0.06
  * ```
  *
- * 渠道取自 id 前缀，能否收图取自 `input` 数组。原始名保留在 `display_name`，
- * 因此**天然幂等**：重复执行都从原始名重建，不会叠出 `[[TRAE]]` 或两个图标。
- * 无 data 数组原样返回。
+ * 渠道取自 id 前缀。原始名保留在 `display_name`，因此**天然幂等**：
+ * 重复执行都从原始名重建，不会叠出 `[[TRAE]]`。无 data 数组原样返回。
  */
 export function decorateModelsWithProvider(payload: any) {
   const data = Array.isArray(payload?.data) ? payload.data : null
@@ -92,8 +78,7 @@ export function decorateModelsWithProvider(payload: any) {
     // 原始名：装饰过的条目读回 display_name，这是幂等的根据。
     const raw =
       (typeof item.display_name === "string" && item.display_name) || (typeof item.name === "string" && item.name) || id
-    const supportsImage = Array.isArray(item.input) && item.input.includes("image")
-    item.name = `[${label}]${supportsImage ? ` ${IMAGE_MODALITY_MARK}` : ""} ${raw}`
+    item.name = `[${label}] ${raw}`
     item.display_name = raw
   }
   return payload

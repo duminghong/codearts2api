@@ -1,15 +1,16 @@
 /**
  * 设置视图 —— 面板上可改的运行时开关。
  *
- * 目前只有「会话开头提示」一个开关：它在**请求路径上**、改完**立刻生效**（不必重启），
- * 所以适合搬进面板。端口 / 鉴权 / 密钥那类是启动期配置或安全边界，仍留在环境变量。
+ * 两个开关：「会话开头提示」与「/v1/models 渠道前缀装饰」—— 都在**请求路径上**、
+ * 改完**立刻生效**（不必重启），所以适合搬进面板。端口 / 鉴权 / 密钥那类是启动期
+ * 配置或安全边界，仍留在环境变量。
  *
  * 语义：**面板为准**。`SESSION_HINT` 环境变量只提供「用户从没动过面板时」的初始默认值；
  * 一旦点过开关，就以面板的值为准（落盘在 `<home>/settings.json`）。
  */
 import { useEffect, useState } from "react"
 
-import { getSettings, setSessionHint, type SettingsState } from "../../api/settings"
+import { getSettings, setModelNameDecor, setSessionHint, type SettingsState } from "../../api/settings"
 import styles from "./index.module.less"
 
 export default function Settings({ active = true }: { active?: boolean }) {
@@ -32,15 +33,20 @@ export default function Settings({ active = true }: { active?: boolean }) {
     }
   }, [active])
 
-  async function toggle(next: boolean) {
+  async function toggle(key: "sessionHint" | "modelNameDecor", next: boolean) {
     setBusy(true)
     setError(null)
     // 先乐观更新，失败再回滚 —— 开关的往返延迟要短到「感觉是即时的」。
     const prev = state
-    setState((s) => (s ? { ...s, sessionHint: next, source: "panel" } : s))
+    setState((s) => (s ? { ...s, [key]: next } : s))
     try {
-      const out = await setSessionHint(next)
-      setState((s) => (s ? { ...s, sessionHint: out.sessionHint, source: "panel" } : s))
+      if (key === "sessionHint") {
+        const out = await setSessionHint(next)
+        setState((s) => (s ? { ...s, sessionHint: out.sessionHint } : s))
+      } else {
+        const out = await setModelNameDecor(next)
+        setState((s) => (s ? { ...s, modelNameDecor: out.modelNameDecor } : s))
+      }
     } catch (e: any) {
       if (prev) setState(prev)
       setError(e.message || String(e))
@@ -50,6 +56,7 @@ export default function Settings({ active = true }: { active?: boolean }) {
   }
 
   const on = state?.sessionHint === true
+  const decorOn = state?.modelNameDecor === true
 
   return (
     <section className="c2a-view" id="c2a-view-settings" data-view="settings" role="tabpanel" aria-label="设置">
@@ -94,7 +101,27 @@ export default function Settings({ active = true }: { active?: boolean }) {
                 aria-checked={on ? "true" : "false"}
                 aria-label="会话开头提示"
                 disabled={busy || !state}
-                onClick={() => toggle(!on)}
+                onClick={() => toggle("sessionHint", !on)}
+              />
+            </div>
+
+            <div className={styles.row}>
+              <div className={styles.rowMain}>
+                <div className={styles.rowTitle}>模型名显示渠道前缀</div>
+                <div className={styles.rowDesc}>
+                  通过本反代的 <code>/v1/models</code> 返回的模型展示名前面加上渠道前缀（如 <code>[TRAE] GLM-5.1</code>
+                  ），方便在模型选择器里区分同名模型的渠道。关掉则原样返回上游的模型名。
+                </div>
+                <div className={styles.rowMeta}>{state ? <>以面板开关为准，未点过时默认开启</> : null}</div>
+              </div>
+              <button
+                type="button"
+                className={styles.sw}
+                role="switch"
+                aria-checked={decorOn ? "true" : "false"}
+                aria-label="模型名显示渠道前缀"
+                disabled={busy || !state}
+                onClick={() => toggle("modelNameDecor", !decorOn)}
               />
             </div>
           </div>

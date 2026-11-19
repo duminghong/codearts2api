@@ -1,0 +1,101 @@
+name: Sync fork
+
+# ── 这个工作流做什么 ──
+#
+# 把 **Fork 源（upstream = zhuweiyou/codearts2api）** 的 main 合并进本仓库（Fork）的
+# main，有更新就推回去。只同步代码，**不**在这里构建/装依赖 —— 那是
+# upgrade-upstream.yml 的事；两个工作流用同一个 concurrency group 串起来，
+# 绝不会同时往 main 推。
+#
+# 冲突时**直接失败**（不 force、不 ours），在 Actions Summary 里给出手动处理步骤。
+#
+# ── 触发时机 ──
+#
+# ① 每天北京时间 08:38（UTC 00:38），与 upgrade-upstream.yml（08:08）错开半小时。
+# ② 可在 Actions 页手动触发（workflow_dispatch）。
+on:
+  schedule:
+    - cron: "38 0 * * *"
+  workflow_dispatch:
+
+# 允许推送到仓库（脚本会 merge + commit）
+permissions:
+  contents: write
+
+# ⚠️ 与 upgrade-upstream.yml **共用一个 group**：两者都会动 main，
+#    必须排队，不能并发（`cancel-in-progress: false` 保证不丢任务）。
+concurrency:
+  group: main-branch-write
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # 拿到完整历史，merge 才能找到共同祖先
+          fetch-depth: 0
+          # 把 GITHUB_TOKEN 写进本地 git 配置，后面 `git push` 直接可用
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch fork source
+        # 加一个临时的 `upstream` remote 指向 Fork 源；origin 始终是本仓库（Fork）。
+        # `git fetch` 失败就是真失败 —— 不吞错，让工作流变红发通知。
+        run: |
+          git remote add upstream https://github.com/zhuweiyou/codearts2api.git || \
+            git remote set-url upstream https://github.com/zhuweiyou/codearts2api.git
+          git fetch upstream main
+
+      - name: Merge fork source into main
+        id: merge
+        run: |
+          set -e
+          git checkout main
+          git reset --hard origin/main
+
+          # 源没有新提交 → 什么都不做，跳过推送。
+          AHEAD=$(git rev-list --count HEAD..upstream/main)
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "Fork 源没有新提交，无需同步。"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Fork 源领先本仓库 $AHEAD 个提交，合并中…"
+
+          # --no-edit：用上游的 merge 提交信息。
+          # ⚠️ 冲突时 git merge 非零退出 ⇒ set -e 让这一步红 ⇒ 下面 Summarize 给出处理步骤。
+          #    绝不用 `|| true` / `-X ours` 吞冲突，那会悄悄丢掉本仓库的改动。
+          git merge --no-edit upstream/main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push synced main
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:main
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          {
+            echo "## ❌ Fork 同步失败"
+            echo ""
+            echo "最常见原因是**合并冲突**：本仓库（Fork）的改动与 Fork 源"
+            echo "\`zhuweiyou/codearts2api\` 的 main 改到了同一处。"
+            echo ""
+            echo "工作流**没有**强推、也没有丢弃任何一方的改动 —— 请在本机手动处理："
+            echo ""
+            echo "\`\`\`bash"
+            echo "git fetch upstream main"
+            echo "git checkout main && git merge upstream/main"
+            echo "# 解决冲突后 git commit，再 git push origin main"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

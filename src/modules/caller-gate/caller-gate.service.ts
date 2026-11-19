@@ -144,7 +144,7 @@ export function createCallerGate(options: any = {}) {
   let cached = null
   let cachedSig = ""
 
-  const usageRecorder = createUsageRecorder({ logDir, logger, isEnabled: () => cached !== null })
+  const usageRecorder = createUsageRecorder({ logDir, logger })
   // 文件不存在（闸门关闭）时的负缓存到期时刻：期内不再 stat，
   // 避免每个 /v1 请求都白做一次系统调用（闸门默认关闭是常态）。
   let missingUntil = 0
