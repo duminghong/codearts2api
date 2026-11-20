@@ -40,7 +40,6 @@ export function buildSessionHintText(balanceText: string | null) {
 export function shouldInjectHint(body: any) {
   const messages = Array.isArray(body?.messages) ? body.messages : null
   if (!messages) return false
-  let hasUser = false
   for (const m of messages) {
     if (!m || typeof m !== "object") continue
     // ponytail: 任意角色的历史消息含标记就视为「本会话已提示过」；content 也可能是多模态数组。
@@ -52,9 +51,15 @@ export function shouldInjectHint(body: any) {
           ? content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("")
           : ""
     if (text.includes(SESSION_HINT_MARKER)) return false
-    if (m.role === "user") hasUser = true
   }
-  return hasUser
+  return hasUserMessage(body)
+}
+
+/** 请求体里有没有 user 消息（没有 ⇒ 不是一次「用户发起的对话」，不注入提示）。 */
+function hasUserMessage(body: any) {
+  const messages = Array.isArray(body?.messages) ? body.messages : null
+  if (!messages) return false
+  return messages.some((m: any) => m && typeof m === "object" && m.role === "user")
 }
 
 /**
@@ -302,24 +307,44 @@ export function summarizeTokenUsage(usage: any): string | null {
  * - 流式：逐帧透传，边看边抓 usage 与首帧 id/model；在 `[DONE]` 前**另起一帧**写入提示，
  *   不改上游任何已有字节（id 沿用首帧，客户端不会丢帧）。
  *
+ * ## 只在「最终轮」注入（2026-11-20）
+ *
+ * agent 一次用户请求会发**多轮** HTTP（每轮工具调用后再一轮）。中间轮的
+ * `finish_reason` 是 `tool_calls`、正文常为空 —— **每轮都注入**会让会话里堆出一串
+ * 提示（用户报障：「提示还是会重复」）。⇒ **`finish_reason === "tool_calls"` 不注入**，
+ * 其余（`stop` / `length` / 字段缺失）照常注入 —— 宽松口径：宁可多一条，也不让提示
+ * 在老客户端/异常形态下彻底消失（fail-open）。
+ *
+ * ## 「当前模型」显示实际命中的渠道
+ *
+ * 上游回显的 `model` 是**请求的路由**（aggregate 路由恒为 `aggregate/*`），不是真正
+ * 发往的渠道。真实渠道只能问上游 `aggregate.activeProvider`（`resolveProvider` 回调），
+ * 且只在**回显仍是 `aggregate/*`** 时才问（直连渠道上游本来就会回显渠道名）。
+ *
  * 全程 fail-open：解析失败 / 超上限 / 抓不到 usage 都只影响提示，绝不吞请求。
  */
 export function createEndHintTransform({
   model,
   isStream,
   logger,
+  resolveProvider,
 }: {
   model: string
   isStream: boolean
   logger?: any
+  /** 取「本次实际命中的渠道」（如 `trae`）；取不到返回 null（回退到响应/请求里的模型名）。 */
+  resolveProvider?: () => Promise<string | null>
 }): Transform {
   const LIMIT = 32 * 1024 * 1024
-  // 显示优先用响应里实际命中的模型；请求模型（如 aggregate/auto）只在响应没带 model 时回退。
+  // 响应里的 model 是**请求的路由**（aggregate/auto 永远是它）；真实渠道靠 resolveProvider 问上游。
   let resolvedModel = model
+  let providerName: string | null = null
+  // 上游的 finish_reason：只有 `stop` 是最终轮（`tool_calls` 是 agent 的中间轮）。
+  let finishReason: string | null = null
   const suffixOf = (usage: any) => {
     const tokenText = summarizeTokenUsage(usage)
     if (!tokenText) return null
-    return `\n\n${buildSessionEndHintText(resolvedModel, tokenText)}`
+    return `\n\n${buildSessionEndHintText(providerName ?? resolvedModel, tokenText)}`
   }
 
   // 非流式：整段 buffer
@@ -338,6 +363,32 @@ export function createEndHintTransform({
     if (!template) template = obj
     if (typeof obj.model === "string" && obj.model) resolvedModel = obj.model
     if (obj.usage && typeof obj.usage === "object") usage = obj.usage
+    const fr = obj?.choices?.[0]?.finish_reason
+    if (typeof fr === "string" && fr) finishReason = fr
+  }
+
+  /** 提示是否该出现在本轮：中间工具轮（`tool_calls`）不注入。 */
+  function shouldInject() {
+    return finishReason !== "tool_calls"
+  }
+
+  /**
+   * 取「本次实际命中的渠道」。
+   *
+   * ⚠️ 只在**回显仍是 aggregate 路由**时才问上游：直连渠道上游本来就会回显渠道名，
+   *    多问一次是白费。问不到（RPC 失败 / 无历史）就回退到回显的模型名（fail-open）。
+   */
+  async function resolveProviderName() {
+    if (providerName !== null) return providerName
+    if (!resolveProvider) return null
+    if (!resolvedModel.startsWith("aggregate/")) return null
+    try {
+      providerName = (await resolveProvider()) ?? null
+    } catch (error) {
+      logger?.debug?.(`[session-end-hint] 取实际渠道失败，回退到模型名：${String(error)}`)
+      providerName = null
+    }
+    return providerName
   }
 
   /** 另起一帧的提示文本（含结尾空行）；抓不到 usage 时空串（不注入）。 */
@@ -363,7 +414,7 @@ export function createEndHintTransform({
     return lf <= crlf ? { at: lf, len: 2 } : { at: crlf, len: 4 }
   }
 
-  function processStreamText(text: string, push: (s: string) => void) {
+  async function processStreamText(text: string, push: (s: string) => void) {
     buf += text
     for (;;) {
       const { at, len } = frameEnd(buf)
@@ -382,10 +433,15 @@ export function createEndHintTransform({
       }
       // ponytail: 提示帧插在 [DONE] 前：此时 usage 已到齐；多一个 delta.content 帧是
       // OpenAI 兼容客户端的标准行为（usage 帧本身也在 finish_reason 之后）。
+      // ⚠️ 中间工具轮（finish_reason=tool_calls）**不注入** —— 那是 agent 的中间步骤，
+      //    每轮都注入会让会话堆出一串提示（用户报障：「提示还是会重复」）。
       if (!injected && /\[DONE\]/.test(rawFrame)) {
-        const extra = hintFrameText()
-        if (extra) push(extra)
         injected = true
+        if (shouldInject()) {
+          await resolveProviderName()
+          const extra = hintFrameText()
+          if (extra) push(extra)
+        }
       }
       push(rawFrame)
     }
@@ -397,10 +453,10 @@ export function createEndHintTransform({
   }
 
   return new Transform({
-    transform(chunk: Buffer, _enc, callback) {
+    async transform(chunk: Buffer, _enc, callback) {
       try {
         if (isStream) {
-          processStreamText(chunk.toString("utf8"), (s) => this.push(s))
+          await processStreamText(chunk.toString("utf8"), (s) => this.push(s))
         } else if (overflow) {
           this.push(chunk)
         } else if ((total += chunk.length) > LIMIT) {
@@ -417,13 +473,17 @@ export function createEndHintTransform({
       }
       callback()
     },
-    flush(callback) {
+    async flush(callback) {
       try {
         if (isStream) {
-          processStreamText("\n\n", (s) => this.push(s)) // 凑齐末帧
+          await processStreamText("\n\n", (s) => this.push(s)) // 凑齐末帧
           if (!injected) {
-            const extra = hintFrameText()
-            if (extra) this.push(extra)
+            injected = true
+            if (shouldInject()) {
+              await resolveProviderName()
+              const extra = hintFrameText()
+              if (extra) this.push(extra)
+            }
           }
         } else if (!overflow) {
           const raw = Buffer.concat(pending)
@@ -432,11 +492,18 @@ export function createEndHintTransform({
             const obj = JSON.parse(raw.toString("utf8"))
             usage = obj?.usage
             if (typeof obj?.model === "string" && obj.model) resolvedModel = obj.model
+            const fr = obj?.choices?.[0]?.finish_reason
+            if (typeof fr === "string" && fr) finishReason = fr
             const message = obj?.choices?.[0]?.message
-            const suffix = suffixOf(usage)
-            if (suffix && message && typeof message.content === "string") {
-              message.content = `${message.content}${suffix}`
-              out = Buffer.from(JSON.stringify(obj), "utf8")
+            // ⚠️ 中间工具轮（finish_reason=tool_calls）**不注入** —— 每轮都注入
+            //    会让会话堆出一串提示（用户报障：「提示还是会重复」）。
+            if (shouldInject() && message && typeof message.content === "string") {
+              await resolveProviderName()
+              const suffix = suffixOf(usage)
+              if (suffix) {
+                message.content = `${message.content}${suffix}`
+                out = Buffer.from(JSON.stringify(obj), "utf8")
+              }
             }
           } catch {
             /* 形态不认识：原样透传 */
@@ -524,6 +591,41 @@ export function createSessionHint({
 
   const flag = (v: boolean | (() => boolean)) => (typeof v === "function" ? v() === true : v === true)
 
+  /**
+   * 虚拟模型 id（上游 `aggregate.activeProvider` 的键）。
+   *
+   * 上游按**虚拟模型**分别记忆「上次实际选中的渠道」（`activeProviderByModel` 的键是
+   * `dispatch` 收到的 modelKey = 虚拟模型 id，如 `auto` / `minimax-m3-1-flash`）。
+   * ⇒ 只有 aggregate 路由需要问；直连渠道上游本来就会在响应里回显渠道名。
+   */
+  function canonicalIdOf(model: string): string | null {
+    const slash = model.indexOf("/")
+    if (slash <= 0) return null
+    if (model.slice(0, slash) !== "aggregate") return null
+    return model.slice(slash + 1) || null
+  }
+
+  /**
+   * 问上游「本次实际命中的渠道」（纯内存读、零网络；无历史返回 null）。
+   *
+   * ⚠️ 上游语义是**真实历史**（已发生的转发），按虚拟模型记忆 ⇒ 并发同模型请求时
+   *    可能读到另一次请求的渠道。ponytail: 这是上游提供的唯一口径，本项目不另造
+   *    「本次命中」的判定（要准确得上游在响应里回显，而它不回显）。
+   */
+  async function activeProvider(canonicalId: string): Promise<string | null> {
+    try {
+      const value = await Promise.race([
+        rpc("aggregate.activeProvider", { canonicalId }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), RPC_TIMEOUT_MS)),
+      ])
+      const provider = value && typeof value.provider === "string" ? value.provider : null
+      return provider && provider !== "aggregate" ? provider : null
+    } catch (error) {
+      logger?.debug?.(`[session-end-hint] 查询实际渠道失败：${String(error)}`)
+      return null
+    }
+  }
+
   /** 请求侧公共解析：判定注入条件 + 模型；withBalance 时才查渠道余额（开头提示要，结尾不要）。 */
   async function resolve(raw: Buffer, model: string | null, withBalance: boolean) {
     let body: any
@@ -559,7 +661,14 @@ export function createSessionHint({
    */
   async function prepareEnd(raw: Buffer, model: string | null) {
     if (!flag(endEnabled ?? enabled)) return null
-    return resolve(raw, model, false)
+    const ctx = await resolve(raw, model, false)
+    if (!ctx) return null
+    const canonicalId = canonicalIdOf(ctx.model)
+    return {
+      model: ctx.model,
+      /** 取本次实际命中的渠道；直连渠道（canonicalId 为 null）不需要问上游。 */
+      resolveProvider: canonicalId ? () => activeProvider(canonicalId) : undefined,
+    }
   }
 
   return { prepare, prepareEnd }

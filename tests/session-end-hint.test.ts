@@ -142,3 +142,88 @@ test("流式：跨 chunk 的半帧也能正确注入", async () => {
   assert.ok(out.includes("本次 token 用量：9"))
   assert.ok(out.trimEnd().endsWith("data: [DONE]"))
 })
+
+test("非流式：中间工具轮（finish_reason=tool_calls）不注入结尾提示", async () => {
+  // 用户报障「提示还是会重复」：agent 一轮请求发多次 HTTP，中间轮也注入 ⇒ 会话堆一串提示。
+  const body = {
+    id: "c1",
+    model: "aggregate/auto",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: "" },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: { total_tokens: 48988, prompt_tokens: 48521, completion_tokens: 467 },
+  }
+  const stream = createEndHintTransform({ model: "aggregate/auto", isStream: false })
+  const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
+  const obj = JSON.parse(out)
+  assert.equal(obj.choices[0].message.content, "", "中间轮正文应原样为空，不追加提示")
+  assert.ok(!out.includes("本次 token 用量"), "中间轮不应出现结尾提示")
+})
+
+test("流式：中间工具轮（finish_reason=tool_calls）不注入结尾提示", async () => {
+  const frames = [
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[{"index":0,"delta":{"content":""},"finish_reason":null}]}\n\n',
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[],"usage":{"total_tokens":48988}}\n\n',
+    "data: [DONE]\n\n",
+  ]
+  const stream = createEndHintTransform({ model: "aggregate/auto", isStream: true })
+  const out = await runTransform(
+    stream,
+    frames.map((f) => Buffer.from(f)),
+  )
+  assert.ok(!out.includes("本次 token 用量"), "中间轮不应出现结尾提示")
+  assert.ok(!out.includes("[网关提示]"), "中间轮不应出现任何提示")
+  assert.ok(out.trimEnd().endsWith("data: [DONE]"), "流仍应正常结束")
+})
+
+test("流式：最终轮（finish_reason=stop）才注入，且显示实际命中的渠道", async () => {
+  const frames = [
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[{"index":0,"delta":{"content":"好了"},"finish_reason":null}]}\n\n',
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+    'data: {"id":"c1","object":"chat.completion.chunk","model":"aggregate/auto","choices":[],"usage":{"total_tokens":49399}}\n\n',
+    "data: [DONE]\n\n",
+  ]
+  // 上游回显的 model 是**请求的路由**（aggregate/auto），真实渠道只能问上游。
+  let asked = 0
+  const stream = createEndHintTransform({
+    model: "aggregate/auto",
+    isStream: true,
+    resolveProvider: async () => {
+      asked++
+      return "minimax"
+    },
+  })
+  const out = await runTransform(
+    stream,
+    frames.map((f) => Buffer.from(f)),
+  )
+  assert.ok(out.includes("当前模型：minimax"), "应显示实际命中的渠道")
+  assert.ok(!out.includes("当前模型：aggregate/auto"), "不应显示请求的聚合路由")
+  assert.ok(out.includes("本次 token 用量：49399"))
+  assert.equal(asked, 1, "只在注入那一刻问一次上游")
+})
+
+test("结尾提示：问不到实际渠道时回退到回显的模型名（fail-open）", async () => {
+  const body = {
+    id: "c1",
+    model: "aggregate/auto",
+    choices: [{ index: 0, message: { role: "assistant", content: "好了" }, finish_reason: "stop" }],
+    usage: { total_tokens: 10 },
+  }
+  const stream = createEndHintTransform({
+    model: "aggregate/auto",
+    isStream: false,
+    resolveProvider: async () => {
+      throw new Error("rpc down")
+    },
+  })
+  const out = await runTransform(stream, [Buffer.from(JSON.stringify(body))])
+  const content: string = JSON.parse(out).choices[0].message.content
+  assert.ok(content.includes("当前模型：aggregate/auto"), "问不到就回退到回显模型")
+  assert.ok(content.includes("本次 token 用量：10"), "提示仍要出")
+})
