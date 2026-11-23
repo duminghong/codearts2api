@@ -1,6 +1,7 @@
 /** `/v1/*` 透明反代控制器（HTTP 边界）：SSE 流式回写，鉴权交给 callerGate。 */
 import { Readable } from "node:stream"
 
+import { READONLY_V1_PATHS } from "../../core/upstream.ts"
 import { readBody } from "../../http/body.ts"
 import { sendAdminJson } from "../../http/security.ts"
 import {
@@ -229,18 +230,19 @@ export function createGatewayController({
       if (!response.writableEnded) stream.destroy()
     })
     stream.on("error", () => response.destroy())
-    const outStream = callerGate
-      ? callerGate.tapStream(stream, {
-          status: upstream.status,
-          callerId: gateEntry?.id,
-          callerName: gateEntry?.name,
-          callerGroup: gateEntry?.group,
-          model: gateModel,
-          path: url.pathname,
-          startedAt,
-          stream: isStream,
-        })
-      : stream
+    const outStream =
+      callerGate && !READONLY_V1_PATHS.has(url.pathname)
+        ? callerGate.tapStream(stream, {
+            status: upstream.status,
+            callerId: gateEntry?.id,
+            callerName: gateEntry?.name,
+            callerGroup: gateEntry?.group,
+            model: gateModel,
+            path: url.pathname,
+            startedAt,
+            stream: isStream,
+          })
+        : stream
     // >>> session-hint（响应侧）：在助手回复正文开头插入用户可见提示。
     // 挂在 usage 记录之后：usage 看的是原始字节，计费/统计不受提示影响。
     let finalStream: any = outStream

@@ -2,6 +2,8 @@ import { appendFile, mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { Transform } from "node:stream"
 
+import { utc8Day } from "../../core/day.ts"
+
 function cachedInputTokens(usage: any, input: unknown): number | null {
   if (usage?.cache_read_reported === false || typeof input !== "number" || !Number.isSafeInteger(input)) return null
   const cached =
@@ -21,11 +23,11 @@ export function createUsageRecorder({ logDir, logger }: { logDir: string; logger
     logChain = logChain.then(async () => {
       try {
         await mkdir(logDir, { recursive: true })
-        // 目录按人眼里的「今天」（UTC+8）分文件，与看板读取端 utc8Date() 同一口径。
-        // 用本地时区会在 Docker（默认 UTC）里把 UTC+8 的 00:00-08:00 记到前一天，
-        // 导致「今日用量」为空、趋势整体错位一天。
-        const day = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
-        await appendFile(join(logDir, `${day}.jsonl`), line, "utf8")
+        // 按 UTC+8 的「今天」分文件，与总览 / 调用方页的读取口径一致。
+        // ⚠️ 不能用服务器本地时区：Docker 镜像默认 UTC，北京时间 00:00-08:00
+        //    会写到前一天的文件，而总览按 UTC+8 查今天 → 「今日用量」恒为 0，
+        //    同一天的 token-ledger（上游按 UTC+8 记）却有数据。
+        await appendFile(join(logDir, `${utc8Day()}.jsonl`), line, "utf8")
       } catch (error) {
         logger?.warn?.(`[caller-gate] 写用量日志失败：${String(error)}`)
       }
@@ -37,8 +39,10 @@ export function createUsageRecorder({ logDir, logger }: { logDir: string; logger
    * 响应流侧回调：边透传边解析用量，结束时写一条日志。不改变字节流本身。
    */
   function tapStream(source, ctx) {
-    // 用量记录与「闸门是否加载 caller-keys.json」无关：直接用网关 Key（常态部署）
-    // 时也必须记，否则总览的今日用量/近14日趋势永远为空。
+    // ⚠️ 采集**不跟着调用方闸门的开关走**：没有 caller-keys.json 时闸门不鉴权，
+    //    但请求照样经过本服务的 /v1 反代，必须记进 caller-usage —— 否则总览
+    //    「今日用量」恒为 0（只用网关 key、不配调用方 key 时就是这种形态）。
+    //    鉴权决定「能不能调」，记账决定「调了多少」，是两件事。
     const startedAt = Number.isFinite(ctx.startedAt) ? ctx.startedAt : Date.now()
     const isStream = Boolean(ctx.stream)
     let status = ctx.status ?? 200
