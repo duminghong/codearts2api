@@ -5,7 +5,8 @@ FROM node:24-slim AS build
 WORKDIR /app
 
 # git：pnpm 要克隆 git 依赖；ca-certificates：TLS 校验
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+# Acquire::Retries：镜像源抖动时逐包自动重试（曾因网络抖动在最后一个包上失败）
+RUN apt-get update && apt-get -o Acquire::Retries=10 install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 # 显式钉 pnpm 版本：corepack 的默认版本会随 Node 镜像漂移，构建不可复现
@@ -18,7 +19,17 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 必须用环境变量：只有它能穿透到 pnpm 的子进程，
 # 绕过 pnpm 11 的「新包冷却期」（上游会把刚发布的 dsh-* 写进自己的 lock）。
 # 缓存挂载只加速重装，不进镜像层。
+#
+# codeload.github.com 抽风（npm 源正常、唯独 GitHub tarball 超时）时，传代理参数走宿主代理：
+#   docker build --build-arg GH_HTTPS_PROXY=http://host.docker.internal:7890 ...
+# 慢但能通的链路（实测 ~25KB/s、11MB tarball 要 7 分钟）还需要拉长 pnpm 单次 fetch 超时：
+#   --build-arg PNPM_FETCH_TIMEOUT=600000
+ARG GH_HTTP_PROXY=""
+ARG GH_HTTPS_PROXY=""
+ARG PNPM_FETCH_TIMEOUT=60000
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+  HTTP_PROXY=$GH_HTTP_PROXY HTTPS_PROXY=$GH_HTTPS_PROXY \
+  PNPM_CONFIG_FETCH_TIMEOUT=$PNPM_FETCH_TIMEOUT \
   PNPM_CONFIG_MINIMUM_RELEASE_AGE=0 pnpm install --frozen-lockfile
 
 COPY . .
