@@ -4,6 +4,7 @@ import { hostRpcCall } from "../../api/rpc"
 import { ensureUpstreamPage } from "../../api/upstream"
 import { MobileProviderPicker } from "./MobileProviderPicker"
 import { ModelsPanelHost } from "./ModelsPanelHost"
+import { LedgerErrorHost } from "./LedgerErrorHost"
 
 function ChannelsView() {
   const [Page, setPage] = useState<React.ComponentType<any> | null>(null)
@@ -34,6 +35,7 @@ export default function ChannelsPage() {
       <ChannelsView />
       <MobileProviderPicker />
       <ModelsPanelHost />
+      <LedgerErrorHost />
     </div>
   )
 }

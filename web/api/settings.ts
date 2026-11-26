@@ -8,10 +8,17 @@ export interface SettingsState {
   sessionEndHint: boolean
   /** /v1/models 展示名加渠道前缀（默认开）。 */
   modelNameDecor: boolean
+  /** 网关报错落盘（默认开）。 */
+  errorLog: boolean
+  /** 失败换渠道重试（默认关）。 */
+  retryFallback: boolean
   /** 当前值来自面板（用户点过）还是环境变量的初始默认值。 */
   source: "env" | "panel"
   /** 结尾提示当前值来源（独立于开头提示）。 */
   sourceEndHint: "env" | "panel"
+  /** 报错落盘 / 换渠道重试没有 env，来源只有「点过面板」或「跟随默认」。 */
+  sourceErrorLog: "default" | "panel"
+  sourceRetryFallback: "default" | "panel"
   /** 环境变量提供的初始默认值（仅供界面提示）。 */
   envDefault: boolean
   /** 结尾提示的 env 初始默认值。 */
@@ -45,3 +52,11 @@ export const setSessionEndHint = (enabled: boolean) =>
 /** 开关「/v1/models 渠道前缀装饰」。返回生效后的值。 */
 export const setModelNameDecor = (enabled: boolean) =>
   request<{ modelNameDecor: boolean }>("/model-name-decor", { method: "PUT", body: JSON.stringify({ enabled }) })
+
+/** 开关「网关报错落盘」。返回生效后的值。 */
+export const setErrorLog = (enabled: boolean) =>
+  request<{ errorLog: boolean }>("/error-log", { method: "PUT", body: JSON.stringify({ enabled }) })
+
+/** 开关「失败换渠道重试」。返回生效后的值。 */
+export const setRetryFallback = (enabled: boolean) =>
+  request<{ retryFallback: boolean }>("/retry-fallback", { method: "PUT", body: JSON.stringify({ enabled }) })

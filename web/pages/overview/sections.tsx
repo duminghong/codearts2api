@@ -1,5 +1,6 @@
 import clsx from "clsx"
 import { useState } from "react"
+import { useNavigate } from "react-router-dom"
 
 import { ago, when } from "../../utils/time"
 import { Card } from "./Card"
@@ -37,6 +38,7 @@ export function GatewaySection({ data }: { data: any }) {
 /* ── 今日用量 ─────────────────────────────────────────────────── */
 
 export function UsageSection({ data }: { data: any }) {
+  const navigate = useNavigate()
   const t = data.usage && data.usage.today
   if (!t) {
     return (
@@ -54,7 +56,25 @@ export function UsageSection({ data }: { data: any }) {
     <Section title="今日用量">
       <Cards>
         <Card k="今日请求" v={fmt(t.requests)} u="次" f={"成功 " + fmt(t.ok) + " · 失败 " + fmt(t.errors)} />
-        <Card k="成功率" v={rate === null ? "—" : rate.toFixed(1)} u="%" f="按今日请求统计" tone={tone} />
+        <Card
+          k="成功率"
+          v={rate === null ? "—" : rate.toFixed(1)}
+          u="%"
+          f={
+            <>
+              按今日请求统计
+              <button
+                type="button"
+                className={styles.errLogLink}
+                title="查看错误日志"
+                onClick={() => navigate("/errors")}
+              >
+                错误日志 →
+              </button>
+            </>
+          }
+          tone={tone}
+        />
         <Card k="输入 tokens" v={fmtTokens(t.inTokens)} f="上下文占大头" tone="brand" />
         <Card k="输出 tokens" v={fmtTokens(t.outTokens)} f="生成部分" />
         <Card k="缓存命中" v={cacheRate} u={cacheRate === "—" ? "" : "%"} f={"缓存读 " + fmtTokens(cacheRead)} />

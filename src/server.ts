@@ -20,6 +20,8 @@ import { readBody } from "./http/body.ts"
 import { serveFrontend } from "./modules/frontend/frontend.controller.ts"
 import { createGatewayController } from "./modules/gateway/gateway.controller.ts"
 import { providerIds, readGatewayState } from "./modules/gateway/gateway.service.ts"
+import { createErrorLogService } from "./modules/gateway/error-log.service.ts"
+import { createErrorLogController } from "./modules/gateway/error-log.controller.ts"
 import { send, sendAdmin, sendAdminJson } from "./http/security.ts"
 import { createModelsController } from "./modules/models/models.controller.ts"
 import { createModelsService } from "./modules/models/models.service.ts"
@@ -123,6 +125,10 @@ export async function createHttpServer(host, options: any = {}) {
   await settingsService.load()
   const settingsAdmin = createSettingsController({ service: settingsService })
 
+  // 网关报错落盘（诊断辅助，fail-open）+ 管理端只读查看接口。
+  const errorLogService = createErrorLogService({ home: host.home, logger, adminRpc })
+  const errorLogAdmin = createErrorLogController({ service: errorLogService })
+
   const throttle = new LoginThrottle()
   const { proxyToGateway } = createGatewayController({
     host,
@@ -134,6 +140,9 @@ export async function createHttpServer(host, options: any = {}) {
     sessionHintEnabled: () => settingsService.sessionHintEnabled(),
     sessionEndHintEnabled: () => settingsService.sessionEndHintEnabled(),
     modelNameDecorEnabled: () => settingsService.modelNameDecorEnabled(),
+    errorLog: errorLogService,
+    errorLogEnabled: () => settingsService.errorLogEnabled(),
+    retryFallbackEnabled: () => settingsService.retryFallbackEnabled(),
   })
   const authRouter = createAuthRouter({ adminKeyEnabled, adminKey, throttle, logger })
   const adminGuard = createAdminGuard({ adminKeyEnabled, adminKey, throttle })
@@ -215,6 +224,7 @@ export async function createHttpServer(host, options: any = {}) {
       "/admin/models/api",
       "/admin/oauth-relay",
       "/admin/settings/api",
+      "/admin/gateway-errors/api",
     ],
     adminGuard,
   )
@@ -228,6 +238,7 @@ export async function createHttpServer(host, options: any = {}) {
   adminApi.use("/models/api", adminGuard, modelsAdmin.router)
   adminApi.use("/oauth-relay", adminGuard, oauthRelay.replayRouter)
   adminApi.use("/settings/api", adminGuard, settingsAdmin.router)
+  adminApi.use("/gateway-errors/api", adminGuard, errorLogAdmin.router)
   app.use("/admin", adminApi)
   app.use("/relay", adminGuard, oauthRelay.relayRouter)
 

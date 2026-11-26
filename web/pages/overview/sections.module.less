@@ -92,6 +92,25 @@ details.chan > summary:focus-visible {
 .dot.off {
   background: var(--dsw-alias-label-tertiary, #8f959e);
 }
+
+// 「成功率」卡片脚注里的错误日志入口。
+.errLogLink {
+  margin-left: 6px;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  opacity: 0.85;
+
+  &:hover {
+    opacity: 1;
+  }
+}
 .bar {
   height: 4px;
   border-radius: 2px;

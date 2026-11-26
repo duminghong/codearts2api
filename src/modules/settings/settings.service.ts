@@ -48,10 +48,16 @@ interface SettingsCache {
   sessionHint?: boolean
   sessionEndHint?: boolean
   modelNameDecor?: boolean
+  errorLog?: boolean
+  retryFallback?: boolean
 }
 
 /** `/v1/models` 渠道前缀装饰的默认值：保持历史行为（一直开着）。 */
 const MODEL_NAME_DECOR_DEFAULT = true
+/** 网关报错落盘的默认值：开（诊断辅助，fail-open，磁盘可控）。无 env 变量，纯面板/默认。 */
+const ERROR_LOG_DEFAULT = true
+/** 失败换渠道重试的默认值：关（会放大上游调用，需用户显式打开）。无 env 变量。 */
+const RETRY_FALLBACK_DEFAULT = false
 
 /**
  * 创建设置服务。
@@ -79,6 +85,8 @@ export function createSettingsService(options: SettingsServiceOptions) {
     if (typeof raw.sessionHint === "boolean") cache.sessionHint = raw.sessionHint
     if (typeof raw.sessionEndHint === "boolean") cache.sessionEndHint = raw.sessionEndHint
     if (typeof raw.modelNameDecor === "boolean") cache.modelNameDecor = raw.modelNameDecor
+    if (typeof raw.errorLog === "boolean") cache.errorLog = raw.errorLog
+    if (typeof raw.retryFallback === "boolean") cache.retryFallback = raw.retryFallback
   }
 
   /** 同步读当前生效值：面板值优先，没动过面板就用 env 默认值。 */
@@ -96,12 +104,24 @@ export function createSettingsService(options: SettingsServiceOptions) {
     return cache.modelNameDecor ?? MODEL_NAME_DECOR_DEFAULT
   }
 
+  /** 同步读报错落盘开关：面板值优先，没动过就是默认开。 */
+  function errorLogEnabled(): boolean {
+    return cache.errorLog ?? ERROR_LOG_DEFAULT
+  }
+
+  /** 同步读换渠道重试开关：面板值优先，没动过就是默认关。 */
+  function retryFallbackEnabled(): boolean {
+    return cache.retryFallback ?? RETRY_FALLBACK_DEFAULT
+  }
+
   /** 完整当前值（含默认值）—— 落盘时用，保证改一个键不擦掉另一个。 */
   function current() {
     return {
       sessionHint: sessionHintEnabled(),
       sessionEndHint: sessionEndHintEnabled(),
       modelNameDecor: modelNameDecorEnabled(),
+      errorLog: errorLogEnabled(),
+      retryFallback: retryFallbackEnabled(),
     }
   }
 
@@ -132,16 +152,39 @@ export function createSettingsService(options: SettingsServiceOptions) {
     return next.modelNameDecor
   }
 
+  /** 改报错落盘开关并落盘（原子写）。返回生效后的值。 */
+  async function setErrorLog(enabled: boolean): Promise<boolean> {
+    await mkdir(home, { recursive: true })
+    const next = { ...current(), errorLog: enabled === true }
+    await writeJsonAtomic(file, next)
+    cache = next
+    return next.errorLog
+  }
+
+  /** 改换渠道重试开关并落盘（原子写）。返回生效后的值。 */
+  async function setRetryFallback(enabled: boolean): Promise<boolean> {
+    await mkdir(home, { recursive: true })
+    const next = { ...current(), retryFallback: enabled === true }
+    await writeJsonAtomic(file, next)
+    cache = next
+    return next.retryFallback
+  }
+
   /** 给管理端看的视图（含「这个值来自哪」，供界面提示）。 */
   function view() {
     return {
       sessionHint: sessionHintEnabled(),
       sessionEndHint: sessionEndHintEnabled(),
       modelNameDecor: modelNameDecorEnabled(),
+      errorLog: errorLogEnabled(),
+      retryFallback: retryFallbackEnabled(),
       /** sessionHint 当前值来自面板（用户点过）还是 env 默认值。 */
       source: cache.sessionHint === undefined ? "env" : "panel",
       /** 结尾提示的值来源（独立于开头提示）。 */
       sourceEndHint: cache.sessionEndHint === undefined ? "env" : "panel",
+      /** 报错落盘 / 换渠道重试没有 env，来源只有「点过面板」或「跟随默认」。 */
+      sourceErrorLog: cache.errorLog === undefined ? "default" : "panel",
+      sourceRetryFallback: cache.retryFallback === undefined ? "default" : "panel",
       /** env 提供的默认值（供界面提示「初始默认值来自环境变量」）。 */
       envDefault,
       envDefaultEndHint,
@@ -156,6 +199,10 @@ export function createSettingsService(options: SettingsServiceOptions) {
     setSessionEndHint,
     modelNameDecorEnabled,
     setModelNameDecor,
+    errorLogEnabled,
+    setErrorLog,
+    retryFallbackEnabled,
+    setRetryFallback,
     view,
     file,
   }
