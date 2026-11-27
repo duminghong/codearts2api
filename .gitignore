@@ -39,6 +39,8 @@ npm-debug.log*
 .upgrade-upstream-tmp/
 # 手工排查上游时的临时克隆（同样用完即删）
 .upstream-probe/
+# dev-grill-docs skill 产物（不在仓库内，自动生成的设计稿）
+.grillkeeper/
 # 数据卷备份（含凭据与账号池，**绝不入库**）
 .backup-vol-*/
 

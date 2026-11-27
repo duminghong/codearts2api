@@ -146,8 +146,6 @@ async function startProxy(options: {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     upstreamTimeoutMs: 5000,
     adminRpc: options.adminRpc ?? defaultRpc(),
-    sessionHintEnabled: false,
-    sessionEndHintEnabled: false,
     modelNameDecorEnabled: false,
     errorLog,
     errorLogEnabled: options.errorLog ?? true,

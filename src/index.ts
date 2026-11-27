@@ -22,14 +22,7 @@ import { createHost } from "./host/host.ts"
 import { createHttpServer } from "./server.ts"
 import { createCallerGate } from "./modules/caller-gate/caller-gate.service.ts"
 import { createUpstreamKeyReader } from "./modules/gateway/gateway-key.service.ts"
-import {
-  resolvePort,
-  resolveHost,
-  resolveProxyGateway,
-  resolveAdminAuth,
-  resolveSessionHint,
-  resolveSessionEndHint,
-} from "./config/env.ts"
+import { resolvePort, resolveHost, resolveProxyGateway, resolveAdminAuth } from "./config/env.ts"
 
 const host = await createHost()
 const port = resolvePort()
@@ -48,16 +41,12 @@ const callerGate = createCallerGate({
 })
 // <<< caller-gate
 const adminAuth = resolveAdminAuth()
-const sessionHint = resolveSessionHint()
-const sessionEndHint = resolveSessionEndHint()
 
 const server = await createHttpServer(host, {
   logger: console,
   proxyGateway,
   adminAuth,
   callerGate,
-  sessionHint,
-  sessionEndHint,
 })
 await new Promise((resolve, reject) => {
   server.once("error", reject)
@@ -75,18 +64,6 @@ if (!adminAuth) {
   console.warn(
     "[codearts2api] ⚠️ CODEARTS2API_ADMIN_AUTH=0：管理端鉴权已关闭，/admin 与 /api/jet-hub 无任何保护。" +
       "只应在本机调试时这样用。",
-  )
-}
-if (sessionHint) {
-  console.log(
-    "[codearts2api] SESSION_HINT=1：首轮聊天会在助手回复开头显示「模型 + 渠道积分」提示" +
-      "（这是初始默认值；面板上的开关以 /admin 的设置为准，可随时改、无需重启）",
-  )
-}
-if (sessionEndHint) {
-  console.log(
-    "[codearts2api] SESSION_END_HINT=1：聊天会在助手回复末尾显示「模型 + 渠道积分 + 本次 token 用量」提示" +
-      "（初始默认值；以 /admin 面板开关为准）",
   )
 }
 

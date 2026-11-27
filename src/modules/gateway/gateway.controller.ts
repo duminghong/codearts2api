@@ -10,15 +10,14 @@ import {
   MODEL_DECOR_LIMIT,
   providerIds,
 } from "./gateway.service.ts"
-import { createEndHintTransform, createResponseHintTransform, createSessionHint } from "./session-hint.service.ts"
 
 /**
- * 会话提示 / 换渠道重试要自己 buffer 请求体时的上限。
+ * 重试/落盘要自己 buffer 请求体时的上限。
  *
  * 与 caller-gate 的 BODY_CAP（32MB）取同值：闸门开着时它就按这个上限收，
  * 这里独立读时用同一把尺子，两条路径的报错形态才一致。
  */
-const HINT_BODY_LIMIT = 32 * 1024 * 1024
+const BODY_LIMIT = 32 * 1024 * 1024
 
 const HOP_BY_HOP = new Set([
   "host",
@@ -145,8 +144,6 @@ export function createGatewayController({
   logger,
   upstreamTimeoutMs,
   adminRpc,
-  sessionHintEnabled,
-  sessionEndHintEnabled,
   modelNameDecorEnabled,
   errorLog,
   errorLogEnabled,
@@ -156,24 +153,12 @@ export function createGatewayController({
   // 各开关可以是布尔常量，也可以是 **getter**（`() => boolean`）：管理端面板的
   // 开关要能实时生效，所以不能在建对象时把开关求值成常量。
   const flag = (v: any) => (typeof v === "function" ? v() === true : v === true)
-  const hintOn = () => flag(sessionHintEnabled)
-  const endHintOn = () => flag(sessionEndHintEnabled)
   // 装饰开关关着时两条装饰路径都整段跳过：不缓冲、不解析，行为与「没有装饰功能」完全一致。
   const decorOn = () => flag(modelNameDecorEnabled)
   // 失败换渠道重试开关：同样每请求现读，面板点完立刻生效。
   const retryOn = () => flag(retryFallbackEnabled)
   // 错误落盘开关（默认开）：service 没接进来时整条链路自然 no-op。开关每请求现读。
   const errorLogOn = () => Boolean(errorLog) && flag(errorLogEnabled ?? true)
-  const sessionHint =
-    typeof adminRpc === "function"
-      ? createSessionHint({
-          enabled: hintOn,
-          endEnabled: endHintOn,
-          rpc: adminRpc,
-          logger,
-          allProviders: () => providerIds(host),
-        })
-      : null
 
   /** 落一条失败（fire-and-forget；service 内部串行队列自带 fail-open，绝不阻塞主链路）。 */
   function recordFailure(
@@ -250,16 +235,16 @@ export function createGatewayController({
   }
 
   /**
-   * 把上游响应透传给客户端，挂上 usage 记账与会话提示（与原路径行为一致）。
+   * 把上游响应透传给客户端，挂上 usage 记账。
    *
    * `headBuffered`：重试/落盘窥探 SSE 首帧时已读的字节，需要灌回流头部；
    * `restStream`：首帧之后剩余的 Node 流。两者同时存在时用 PassThrough 串起来。
    */
   function pipeUpstream(upstream: any, response: any, opts: any) {
-    const { headBuffered, restStream, isStream, gateEntry, gateModel, hintText, endHintCtx, startedAt, path } = opts
+    const { headBuffered, restStream, isStream, gateEntry, gateModel, startedAt, path } = opts
     const outHeaders = pickHeaders(upstream)
-    // 提示/首帧缓冲都会让 body 与上游 content-length 对不上 → 删掉走 chunked。
-    if (hintText || endHintCtx || headBuffered) delete outHeaders["content-length"]
+    // 首帧缓冲会让 body 与上游 content-length 对不上 → 删掉走 chunked。
+    if (headBuffered) delete outHeaders["content-length"]
     response.writeHead(upstream.status, outHeaders)
 
     let stream: any
@@ -325,19 +310,7 @@ export function createGatewayController({
             stream: isStream,
           })
         : stream
-    let finalStream: any = outStream
-    if (hintText) finalStream = finalStream.pipe(createResponseHintTransform({ hintText, isStream, logger }))
-    if (endHintCtx) {
-      finalStream = finalStream.pipe(
-        createEndHintTransform({
-          model: endHintCtx.model,
-          isStream,
-          logger,
-          resolveProvider: endHintCtx.resolveProvider,
-        }),
-      )
-    }
-    finalStream.pipe(response)
+    outStream.pipe(response)
   }
 
   /** 把已读取过部分的 reader 包回 Node 可读流（剩余字节不丢）。 */
@@ -390,41 +363,6 @@ export function createGatewayController({
       }
     }
 
-    // >>> session-hint
-    // 首轮聊天请求：判定 + 生成「用户可见」提示文本（**不改写请求体** —— 提示给用户，不给模型）。
-    //
-    // ⚠️ 请求体来源有两条路，**必须都覆盖**：
-    //   1. 闸门开着 → caller-gate 已 buffer（gateBody），直接用；
-    //   2. 闸门关着（**默认形态**：没有 caller-keys.json）→ gateBody 是 undefined，
-    //      闸门把请求体原样留给流式透传。所以这里自己 buffer 一次。
-    //   只认 gateBody 的话，默认形态下这个功能**永远不会触发**（2026-11-18 实测证实）。
-    //
-    // ⚠️ 开关关着时**整段跳过**：否则会为了「读完再原样转发」而无谓地 buffer
-    //    整个请求体（SSE 长对话尤其明显）。开关是每请求现读的，所以点了立刻生效。
-    let hintText: string | null = null
-    let endHintCtx: { model: string; resolveProvider?: () => Promise<string | null> } | null = null
-    const needBodyBuffer = isChat && hasBody
-    if (sessionHint && (hintOn() || endHintOn()) && needBodyBuffer) {
-      let body = gateBody
-      if (!body) {
-        const declared = Number(headers.get("content-length") ?? Number.NaN)
-        if (Number.isFinite(declared) && declared > 0 && declared <= HINT_BODY_LIMIT) {
-          try {
-            body = await readBody(request, HINT_BODY_LIMIT)
-          } catch (error) {
-            logger?.debug?.(`[session-hint] 读取请求体失败，跳过提示：${String(error)}`)
-            body = undefined
-          }
-        }
-      }
-      if (body) {
-        gateBody = body
-        if (hintOn()) hintText = await sessionHint.prepare(body, gateModel ?? null)
-        if (endHintOn()) endHintCtx = await sessionHint.prepareEnd(body, gateModel ?? null)
-      }
-    }
-    // <<< session-hint
-
     const ctx = {
       request,
       response,
@@ -436,8 +374,6 @@ export function createGatewayController({
       gateBody,
       gateModel,
       gateEntry,
-      hintText,
-      endHintCtx,
       startedAt,
     }
 
@@ -569,13 +505,13 @@ export function createGatewayController({
       const declared = Number(headers.get("content-length") ?? Number.NaN)
       // 长度不明（chunked）/超限/缺失：不碰请求体，退回单次透传（fail-open）。
       // 宁可不重试也不打死长对话；落盘此时退化成只记 HTTP 状态、没有逐请求 model 归属。
-      const canBuffer = Number.isFinite(declared) && declared > 0 && declared <= HINT_BODY_LIMIT
+      const canBuffer = Number.isFinite(declared) && declared > 0 && declared <= BODY_LIMIT
       if (retry && !canBuffer) {
         return await singlePassthrough(ctx)
       }
       if (canBuffer) {
         try {
-          body = await readBody(request, HINT_BODY_LIMIT)
+          body = await readBody(request, BODY_LIMIT)
         } catch (error) {
           logger?.debug?.(`[gateway-retry] 读取请求体失败：${String(error)}`)
           body = undefined
@@ -653,21 +589,7 @@ export function createGatewayController({
 
   /** 落盘/重试都拿不到请求体归属时的退路：一次原样透传（与改造前一致）。 */
   async function singlePassthrough(ctx: any) {
-    const {
-      request,
-      response,
-      url,
-      target,
-      headers,
-      method,
-      hasBody,
-      gateBody,
-      gateModel,
-      gateEntry,
-      hintText,
-      endHintCtx,
-      startedAt,
-    } = ctx
+    const { request, response, url, target, headers, method, hasBody, gateBody, gateModel, gateEntry, startedAt } = ctx
     let upstream: any
     try {
       upstream = await fetch(`http://${target.host}:${target.port}${url.pathname}${url.search}`, {
@@ -706,8 +628,6 @@ export function createGatewayController({
       isStream,
       gateEntry,
       gateModel,
-      hintText,
-      endHintCtx,
       startedAt,
       path: url.pathname,
     })
@@ -724,7 +644,7 @@ export function createGatewayController({
     args: any,
   ): Promise<{ kind: "passed"; failure?: UpstreamError } | { kind: "retryable"; error: UpstreamError }> {
     const { ctx, body, provider, bare, mayRetry } = args
-    const { response, url, target, headers, method, gateEntry, gateModel, hintText, endHintCtx, startedAt } = ctx
+    const { response, url, target, headers, method, gateEntry, gateModel, startedAt } = ctx
     const sendModel = bare ? `${provider}/${bare}` : String(gateModel ?? "")
     const wantPeek = errorLogOn() || mayRetry
 
@@ -761,7 +681,7 @@ export function createGatewayController({
     }
 
     const isSse = String(upstream.headers.get("content-type") ?? "").includes("event-stream")
-    const pipeOpts = { gateEntry, gateModel: sendModel, hintText, endHintCtx, startedAt, path: url.pathname }
+    const pipeOpts = { gateEntry, gateModel: sendModel, startedAt, path: url.pathname }
 
     // 流式且失败可能在首帧：窥探一个事件边界。peek 仅在「要重试」或「要落盘」时做。
     if (isSse && wantPeek && upstream.body !== null) {

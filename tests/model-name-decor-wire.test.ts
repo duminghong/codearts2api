@@ -26,7 +26,6 @@ async function startProxy(enabled: boolean | (() => boolean)) {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     upstreamTimeoutMs: 5000,
     adminRpc: async () => ({ accounts: [] }),
-    sessionHintEnabled: false,
     modelNameDecorEnabled: enabled,
   })
   // 假上游：返回固定模型列表。

@@ -43,30 +43,3 @@ export function resolveAdminAuth(env = process.env): boolean {
   if (raw === undefined || raw === "") return true
   return !["0", "false", "off", "no"].includes(raw)
 }
-
-/**
- * 会话开头提示（默认关闭；`SESSION_HINT=1/true/on/yes` 开启）。
- * 开启后在 /v1/chat/completions 首轮聊天的助手回复正文开头，插入一条用户可见的
- * 「当前模型 + 渠道剩余积分」提示（不是发给模型的 system 消息）。
- *
- * ⚠️ 这里只提供**初始默认值**：用户在 /admin 面板点过开关后以面板为准
- *    （见 `src/modules/settings/settings.service.ts`）。改了 env 仍需重启才生效。
- */
-export function resolveSessionHint(env = process.env): boolean {
-  const raw = env.SESSION_HINT?.trim().toLowerCase()
-  if (raw === undefined || raw === "") return false
-  return ["1", "true", "on", "yes"].includes(raw)
-}
-
-/**
- * 会话结尾提示（默认关闭；`SESSION_END_HINT=1/true/on/yes` 开启）。
- * 开启后在 /v1/chat/completions 的助手回复正文末尾，追加一条用户可见的
- * 「当前模型 + 渠道剩余积分 + 本次 token 用量」提示。
- *
- * 与 SESSION_HINT 一样只提供初始默认值；面板点过之后以面板为准。
- */
-export function resolveSessionEndHint(env = process.env): boolean {
-  const raw = env.SESSION_END_HINT?.trim().toLowerCase()
-  if (raw === undefined || raw === "") return false
-  return ["1", "true", "on", "yes"].includes(raw)
-}

@@ -117,11 +117,7 @@ export async function createHttpServer(host, options: any = {}) {
   const modelsAdmin = createModelsController({ service: modelsService })
 
   // 管理端可改的运行时开关。env 只给初始默认值，用户在面板点过就以面板为准。
-  const settingsService = createSettingsService({
-    home: host.home,
-    envDefault: options.sessionHint === true,
-    envDefaultEndHint: options.sessionEndHint === true,
-  })
+  const settingsService = createSettingsService({ home: host.home })
   await settingsService.load()
   const settingsAdmin = createSettingsController({ service: settingsService })
 
@@ -136,9 +132,6 @@ export async function createHttpServer(host, options: any = {}) {
     logger,
     upstreamTimeoutMs: options.upstreamTimeoutMs,
     adminRpc,
-    // 每次请求现读，点了开关立刻生效（不必重启）。
-    sessionHintEnabled: () => settingsService.sessionHintEnabled(),
-    sessionEndHintEnabled: () => settingsService.sessionEndHintEnabled(),
     modelNameDecorEnabled: () => settingsService.modelNameDecorEnabled(),
     errorLog: errorLogService,
     errorLogEnabled: () => settingsService.errorLogEnabled(),
@@ -170,8 +163,6 @@ export async function createHttpServer(host, options: any = {}) {
         providers: providerIds(host),
         proxyGateway,
         adminAuth: adminKeyEnabled(),
-        sessionHint: settingsService.sessionHintEnabled(),
-        sessionEndHint: settingsService.sessionEndHintEnabled(),
         gateway,
       })
     }),
